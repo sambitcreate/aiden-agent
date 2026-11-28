@@ -5,6 +5,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import type { RuntimeProfileId } from "../runtime-profile-core.js";
+import { hasExactKeys, isRecord } from "../shared/guards.js";
 import path from "node:path";
 import type { AidenRemoteCapability } from "./aiden-remote-protocol.js";
 import {
@@ -189,24 +190,6 @@ export interface AidenRemoteStateHostPolicy {
   botCapabilitiesSupported(): boolean;
 }
 
-function ownRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function exactKeys(
-  record: Record<string, unknown>,
-  required: readonly string[],
-  optional: readonly string[] = [],
-): boolean {
-  const allowed = new Set([...required, ...optional]);
-  return (
-    required.every((key) => Object.prototype.hasOwnProperty.call(record, key)) &&
-    Object.keys(record).every((key) => allowed.has(key))
-  );
-}
-
 function boundedString(value: unknown, maximum: number): value is string {
   if (typeof value !== "string" || value.length === 0) return false;
   let characters = 0;
@@ -384,7 +367,7 @@ function parsePersistedCapabilities(
 }
 
 function parseDevice(value: unknown): StoredAidenRemoteDevice | null {
-  const record = ownRecord(value);
+  const record = isRecord(value) ? value : null;
   const required = [
     "id",
     "name",
@@ -399,7 +382,7 @@ function parseDevice(value: unknown): StoredAidenRemoteDevice | null {
   ] as const;
   if (
     !record ||
-    !exactKeys(record, required, [
+    !hasExactKeys(record, required, [
       "acceptsBotCapabilities",
       "acceptsProgressCapabilities",
       "revokedAt",
@@ -452,10 +435,10 @@ function parseDevice(value: unknown): StoredAidenRemoteDevice | null {
 }
 
 function parseApprovedRoot(value: unknown): AidenRemoteApprovedRoot | null {
-  const record = ownRecord(value);
+  const record = isRecord(value) ? value : null;
   if (
     !record ||
-    !exactKeys(record, [
+    !hasExactKeys(record, [
       "id",
       "label",
       "folderPath",
@@ -481,10 +464,10 @@ function parseApprovedRoot(value: unknown): AidenRemoteApprovedRoot | null {
 
 function parseOwnership(value: unknown): AidenTailscaleOwnership | undefined {
   if (value === undefined) return undefined;
-  const record = ownRecord(value);
+  const record = isRecord(value) ? value : null;
   if (
     !record ||
-    !exactKeys(record, ["path", "target"]) ||
+    !hasExactKeys(record, ["path", "target"]) ||
     record.path !== "/api/aiden/v1" ||
     !boundedString(record.target, 2_048)
   ) {
@@ -495,10 +478,10 @@ function parseOwnership(value: unknown): AidenTailscaleOwnership | undefined {
 
 function parsePendingOutcome(value: unknown): AidenTailscalePendingRouteOutcome | undefined {
   if (value === undefined) return undefined;
-  const record = ownRecord(value);
+  const record = isRecord(value) ? value : null;
   if (
     !record
-    || !exactKeys(
+    || !hasExactKeys(
       record,
       [
         "operation",
@@ -574,10 +557,10 @@ export function parseAidenRemoteStateDocument(
   value: unknown,
   legacyDisplayName = FALLBACK_AIDEN_REMOTE_DISPLAY_NAME,
 ): AidenRemoteStateDocument {
-  const record = ownRecord(value);
+  const record = isRecord(value) ? value : null;
   if (
     !record ||
-    !exactKeys(
+    !hasExactKeys(
       record,
       ["version", "instanceId", "enabled", "connectionMode", "lanPort", "devices", "approvedRoots"],
       ["displayName", "lanPortCommitted", "tailscaleOwnership", "tailscalePendingOutcome", "mcpServer"],
@@ -639,10 +622,10 @@ export function parseAidenRemoteStateDocument(
 
 function parseMcpServerSettings(value: unknown): AidenMcpServerSettings | undefined {
   if (value === undefined) return undefined;
-  const record = ownRecord(value);
+  const record = isRecord(value) ? value : null;
   if (
     !record ||
-    !exactKeys(record, ["enabled"], ["port"]) ||
+    !hasExactKeys(record, ["enabled"], ["port"]) ||
     typeof record.enabled !== "boolean" ||
     (record.port !== undefined && !isValidMcpServerPort(record.port))
   ) {
@@ -768,13 +751,13 @@ export class AidenRemoteStateRegistry {
           );
         }
       }
-      const rawRecord = ownRecord(raw);
+      const rawRecord = isRecord(raw) ? raw : null;
       const storageNeedsSave = this.storage.needsSaveAfterLoad
         ? await this.storage.needsSaveAfterLoad()
         : rawRecord?.displayName === undefined || rawRecord?.lanPortCommitted === undefined;
       const devicesNeedVocabularyMigration = Array.isArray(rawRecord?.devices)
         && rawRecord.devices.some((device) => {
-          const record = ownRecord(device);
+          const record = isRecord(device) ? device : null;
           return record !== null
             && (
               !Object.prototype.hasOwnProperty.call(record, "acceptsBotCapabilities") ||

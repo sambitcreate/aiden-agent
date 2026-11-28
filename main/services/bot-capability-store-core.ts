@@ -1,3 +1,4 @@
+import { hasExactKeys, isRecord } from "../shared/guards.js";
 import {
   BOT_CAPABILITY_LIMITS,
   BOT_CAPABILITY_STORE_VERSION,
@@ -241,22 +242,6 @@ export class BotCapabilityNoticeRequiredError extends Error {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function exactKeys(
-  value: Record<string, unknown>,
-  required: readonly string[],
-  optional: readonly string[] = [],
-): boolean {
-  const allowed = new Set([...required, ...optional]);
-  return (
-    required.every((key) => Object.prototype.hasOwnProperty.call(value, key)) &&
-    Object.keys(value).every((key) => allowed.has(key))
-  );
-}
-
 function safeInteger(value: unknown, minimum = 0): value is number {
   return Number.isSafeInteger(value) && (value as number) >= minimum;
 }
@@ -290,7 +275,7 @@ function parseIncarnationNamespace(value: unknown): StoredBotCapabilityIncarnati
   return value.map((candidate) => {
     if (
       !isRecord(candidate) ||
-      !exactKeys(candidate, [
+      !hasExactKeys(candidate, [
         "partition",
         "sourceId",
         "resourceIncarnation",
@@ -330,7 +315,7 @@ function parseIncarnationNamespace(value: unknown): StoredBotCapabilityIncarnati
 }
 
 function parseIncarnations(value: unknown): StoredBotCapabilityIncarnations {
-  if (!isRecord(value) || !exactKeys(value, ["provider", "mcp", "skill"])) {
+  if (!isRecord(value) || !hasExactKeys(value, ["provider", "mcp", "skill"])) {
     throw new BotCapabilityUnavailableError("Bot capability incarnation storage is invalid.");
   }
   return {
@@ -360,12 +345,12 @@ function parseRevision(value: Record<string, unknown>, stateSequence: number): S
 function parseStoredBotModelAuthority(value: unknown): StoredBotModelAuthority {
   if (
     !isRecord(value) ||
-    !exactKeys(value, ["selection", "binding"]) ||
+    !hasExactKeys(value, ["selection", "binding"]) ||
     !isRecord(value.selection)
   ) {
     throw new BotCapabilityUnavailableError("Bot model authority storage is invalid.");
   }
-  if (!exactKeys(value.selection, ["providerId", "modelId"])) {
+  if (!hasExactKeys(value.selection, ["providerId", "modelId"])) {
     throw new BotCapabilityUnavailableError("Bot model selection storage is invalid.");
   }
   const providerId = value.selection.providerId;
@@ -428,7 +413,7 @@ function parsePolicy(value: unknown, stateSequence: number): StoredBotCapability
     "updatedAt",
   ] as const;
   if (
-    !exactKeys(
+    !hasExactKeys(
       value,
       common,
       value.accessMode === "custom"
@@ -492,7 +477,7 @@ function parseChatPolicy(value: unknown, stateSequence: number): StoredBotChatCa
     "updatedAt",
   ] as const;
   if (
-    !exactKeys(value, common, value.mode === "custom" ? ["custom"] : []) ||
+    !hasExactKeys(value, common, value.mode === "custom" ? ["custom"] : []) ||
     (value.mode !== "inherit" && value.mode !== "custom") ||
     !safeInteger(value.policyEpoch, 1) ||
     !safeTimestamp(value.createdAt) ||
@@ -519,7 +504,7 @@ function parseChatPolicy(value: unknown, stateSequence: number): StoredBotChatCa
 function parseNotice(value: unknown, stateSequence: number): StoredBotNoticeAcceptance {
   if (
     !isRecord(value) ||
-    !exactKeys(value, [
+    !hasExactKeys(value, [
       "audienceId",
       "version",
       "decision",
@@ -549,7 +534,7 @@ function parseLegacyMigration(
   if (value === undefined) return undefined;
   if (
     !isRecord(value) ||
-    !exactKeys(value, ["completedAt", "revision", "revisionSequence"]) ||
+    !hasExactKeys(value, ["completedAt", "revision", "revisionSequence"]) ||
     !safeTimestamp(value.completedAt)
   ) {
     throw new BotCapabilityUnavailableError("Bot access migration storage is invalid.");
@@ -575,7 +560,7 @@ export function emptyBotCapabilityState(): BotCapabilityState {
 export function parseBotCapabilityState(value: unknown): BotCapabilityState {
   if (
     !isRecord(value) ||
-    !exactKeys(
+    !hasExactKeys(
       value,
       ["version", "sequence", "policies", "chats", "notices", "incarnations"],
       ["legacyMigration", "routineModels", "peerMessaging"],

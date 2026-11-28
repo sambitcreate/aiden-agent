@@ -7,6 +7,7 @@
  * configuration.
  */
 
+import { isRecord } from "../../main/shared/guards.js";
 import type { WebExtractKeyPoolId } from "./web-search-key-pool.js";
 
 export const WEB_FETCH_SETTINGS_VERSION = 1 as const;
@@ -64,10 +65,6 @@ export function defaultWebFetchSettings(): WebFetchSettingsV1 {
     enabled: true,
     extract: { enabled: false, model: "cloudflare-clairic" },
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function isWebExtractModelId(value: unknown): value is WebExtractModelId {

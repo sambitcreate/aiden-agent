@@ -1,4 +1,5 @@
 import type { ChatUiVisualV1 } from "./aiden-ui/types.js";
+import { hasExactKeys } from "../../main/shared/guards.js";
 import { parseChatUiVisualV1 } from "./aiden-ui/visual.js";
 import { isCanonicalRasterImageMimeType, MAX_INLINE_IMAGE_BYTES } from "./attachment-contract.js";
 import {
@@ -126,11 +127,6 @@ const MAX_PLACEMENTS = 40;
 const MAX_ID_CHARS = 256;
 const MAX_NAME_CHARS = 512;
 const MAX_BASE64_CHARS = Math.ceil(MAX_INLINE_IMAGE_BYTES / 3) * 4;
-
-function hasExactKeys(value: Record<string, unknown>, keys: ReadonlySet<string>): boolean {
-  const ownKeys = Object.keys(value);
-  return ownKeys.length === keys.size && ownKeys.every((key) => keys.has(key));
-}
 
 function decodedBase64Bytes(value: string): number | undefined {
   if (value.length === 0 || value.length % 4 !== 0 || value.length > MAX_BASE64_CHARS) {

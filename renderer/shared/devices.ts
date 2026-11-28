@@ -1,4 +1,5 @@
 /** Simulator devices cross the renderer ↔ main boundary only through these fail-closed shapes. */
+import { isRecord } from "../../main/shared/guards.js";
 import {
   parseDeviceToolVersions,
   parseSshDeviceHostConfigs,
@@ -124,10 +125,6 @@ export interface DeviceStreamGrant {
 
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43,}$/u;
 const LOOPBACK_ORIGIN_PATTERN = /^http:\/\/127\.0\.0\.1:([1-9][0-9]{0,4})$/u;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function nonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;

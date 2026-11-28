@@ -1,3 +1,5 @@
+import { isRecord } from "../../main/shared/guards.js";
+
 export const GRABBED_ELEMENT_SCHEMA_VERSION = 1 as const;
 export const GRABBED_ELEMENT_THUMBNAIL_PREFIX = "grab-thumb_";
 export const MAX_GRABBED_ELEMENTS_PER_MESSAGE = 10;
@@ -176,10 +178,6 @@ export function grabbedElementsRepresentationBytes(
   return utf8Encoder.encode(JSON.stringify(elements)).byteLength;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function assertAllowedKeys(
   record: Record<string, unknown>,
   allowed: ReadonlySet<string>,
@@ -212,7 +210,7 @@ function parseSourceLocation(
   mode: GrabbedElementsParseMode,
 ): GrabbedElementSourceLocation | undefined {
   if (value === undefined) return undefined;
-  if (!isPlainObject(value)) throw new Error("Invalid grabbed element source.");
+  if (!isRecord(value)) throw new Error("Invalid grabbed element source.");
   assertAllowedKeys(value, SOURCE_KEYS, "source", mode);
   const filePath = parseRequiredString(value.filePath, "source.filePath", 512);
   const result: GrabbedElementSourceLocation = { filePath };
@@ -248,7 +246,7 @@ function parseComponentStack(
   }
   const frames: GrabbedElementComponentFrame[] = [];
   for (const item of value.slice(0, MAX_COMPONENT_STACK)) {
-    if (!isPlainObject(item)) {
+    if (!isRecord(item)) {
       if (mode === "append") throw new Error("Invalid grabbed element componentStack frame.");
       continue;
     }
@@ -283,7 +281,7 @@ function parseProps(
   mode: GrabbedElementsParseMode,
 ): Record<string, string | number | boolean | null> | undefined {
   if (value === undefined) return undefined;
-  if (!isPlainObject(value)) throw new Error("Invalid grabbed element props.");
+  if (!isRecord(value)) throw new Error("Invalid grabbed element props.");
   const entries = Object.entries(value);
   if (mode === "append" && entries.length > MAX_PROPS) {
     throw new Error("Too many grabbed element props.");
@@ -325,7 +323,7 @@ function parseStringRecord(
   filterAttributes: boolean,
 ): Record<string, string> | undefined {
   if (value === undefined) return undefined;
-  if (!isPlainObject(value)) throw new Error(`Invalid grabbed element ${field}.`);
+  if (!isRecord(value)) throw new Error(`Invalid grabbed element ${field}.`);
   const entries = Object.entries(value);
   if (mode === "append" && entries.length > maxEntries) {
     throw new Error(`Too many grabbed element ${field}.`);
@@ -353,7 +351,7 @@ function parseStringRecord(
 }
 
 function parseBoundingBox(value: unknown, mode: GrabbedElementsParseMode): GrabbedElementBoundingBox {
-  if (!isPlainObject(value)) throw new Error("Invalid grabbed element boundingBox.");
+  if (!isRecord(value)) throw new Error("Invalid grabbed element boundingBox.");
   assertAllowedKeys(value, BOX_KEYS, "boundingBox", mode);
   const { x, y, width, height } = value;
   if (
@@ -372,7 +370,7 @@ function parseViewport(
   mode: GrabbedElementsParseMode,
 ): GrabbedElementViewport | undefined {
   if (value === undefined) return undefined;
-  if (!isPlainObject(value)) throw new Error("Invalid grabbed element viewport.");
+  if (!isRecord(value)) throw new Error("Invalid grabbed element viewport.");
   assertAllowedKeys(value, VIEWPORT_KEYS, "viewport", mode);
   const { width, height, devicePixelRatio, zoomFactor } = value;
   if (
@@ -401,7 +399,7 @@ function parseSingleGrabbedElement(
   value: unknown,
   mode: GrabbedElementsParseMode,
 ): GrabbedElementContextV1 {
-  if (!isPlainObject(value)) throw new Error("Invalid grabbed element.");
+  if (!isRecord(value)) throw new Error("Invalid grabbed element.");
   assertAllowedKeys(value, ELEMENT_KEYS, "grabbed element", mode);
   if (value.version !== GRABBED_ELEMENT_SCHEMA_VERSION) {
     throw new Error("Unsupported grabbed element schema version.");

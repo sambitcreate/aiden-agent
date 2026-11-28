@@ -1,4 +1,5 @@
 import type { ImageContent } from "@earendil-works/pi-ai";
+import { isRecord } from "../shared/guards.js";
 import { hasCanonicalBase64Padding, validateDisplayImageDimensions } from "./display-image-extension.js";
 
 export const MAX_GENERATED_IMAGES = 4;
@@ -11,10 +12,6 @@ export interface ParsedGeneratedImages {
   sizes: { bytes: number; pixels: number; width: number; height: number }[];
   description: string;
   truncated: boolean;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 /**

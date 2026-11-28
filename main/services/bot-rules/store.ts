@@ -40,6 +40,7 @@ import {
 } from "../../../renderer/shared/bot-rules.js";
 import { writeJsonAtomic } from "../durable-fs.js";
 import { createKeyedSerial, botSessionDirectory } from "../bot-routine-notes.js";
+import { hasExactKeys, isPlainObject } from "../../shared/guards.js";
 import { contentStems } from "./words.js";
 
 export const BOT_RULES_FILE = "rules.json";
@@ -100,15 +101,6 @@ export class BotRulesUnavailableError extends Error {
   }
 }
 
-function plainObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
-}
-
-function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const own = Object.keys(value);
-  return own.length === keys.length && own.every((key) => keys.includes(key));
-}
-
 /** A custom rule's text as stored, or `undefined` when it is not a usable rule. */
 export function validCustomRuleText(text: unknown): string | undefined {
   if (typeof text !== "string") return undefined;
@@ -121,10 +113,10 @@ export function validCustomRuleText(text: unknown): string | undefined {
 
 /** The file exactly as written by this store, or `undefined`. */
 function parseRulesFile(value: unknown): RulesFile | undefined {
-  if (!plainObject(value) || !exactKeys(value, ["version", "revision", "behaviors", "custom"])) return undefined;
+  if (!isPlainObject(value) || !hasExactKeys(value, ["version", "revision", "behaviors", "custom"])) return undefined;
   if (value.version !== FILE_VERSION) return undefined;
   if (!Number.isSafeInteger(value.revision) || (value.revision as number) < 1) return undefined;
-  if (!plainObject(value.behaviors) || !Array.isArray(value.custom)) return undefined;
+  if (!isPlainObject(value.behaviors) || !Array.isArray(value.custom)) return undefined;
   const behaviors: RulesFile["behaviors"] = {};
   for (const [key, behavior] of Object.entries(value.behaviors)) {
     if (!(BOT_CHANGEABLE_ACTION_CLASSES as readonly string[]).includes(key) || !isBotRuleBehavior(behavior)) return undefined;
@@ -134,7 +126,7 @@ function parseRulesFile(value: unknown): RulesFile | undefined {
   const ids = new Set<string>();
   const custom: StoredCustomRule[] = [];
   for (const entry of value.custom) {
-    if (!plainObject(entry) || !exactKeys(entry, ["id", "text", "behavior"])) return undefined;
+    if (!isPlainObject(entry) || !hasExactKeys(entry, ["id", "text", "behavior"])) return undefined;
     if (typeof entry.id !== "string" || !BOT_CUSTOM_RULE_ID_PATTERN.test(entry.id) || ids.has(entry.id)) return undefined;
     const text = validCustomRuleText(entry.text);
     if (text === undefined || text !== entry.text || !isBotRuleBehavior(entry.behavior)) return undefined;

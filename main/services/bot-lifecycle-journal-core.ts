@@ -3,6 +3,7 @@ import {
   isBotManagedWorkspaceId,
   isPathSafeBotManagedIdentifier,
 } from "./bot-managed-workspace-core.js";
+import { hasExactKeys, isRecord } from "../shared/guards.js";
 
 export const BOT_LIFECYCLE_JOURNAL_VERSION = 2 as const;
 export const BOT_LIFECYCLE_JOURNAL_LIMIT = 512;
@@ -144,16 +145,6 @@ const STAGES: Readonly<Record<BotLifecycleKind, readonly BotLifecycleStage[]>> =
   archive_bot: ["prepared", "authority_archived", "identity_archived"],
   restore_bot: ["prepared", "identity_restored", "authority_restored"],
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
-}
 
 function isTimestamp(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;

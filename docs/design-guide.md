@@ -622,6 +622,10 @@ script can check and prints `file:line rule message` for each hit:
   file and `match`, `doesNotMatch` or `includes` against it.
 - `literal-motion`: no literal `cubic-bezier(` in renderer CSS or code outside a
   `--motion-*` or `--ease-*` token definition. Comments are skipped.
+- `no-local-structural-guard`: no local `isRecord`, `ownRecord`, `plainRecord`,
+  `isPlainObject`, `exactKeys`, `hasExactKeys` or plain-record snapshot helpers
+  in `main/` or `renderer/` outside `main/shared/guards.ts`,
+  `main/shared/plain-record.ts` and `main/services/web-search-*`.
 
 Known gaps: the checker does not see focus styles on `focus-within` wrappers,
 CSS `:focus` outlines, a `className` passed in through a variable, or a

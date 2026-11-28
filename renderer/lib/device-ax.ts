@@ -10,6 +10,7 @@
  * serve-emu's `/api/accessibility` (a `uiautomator dump`), normalized to the
  * same frames by `flattenAndroidAxSnapshot`.
  */
+import { isRecord } from "../../main/shared/guards.js";
 import type { DevicePlatform, DeviceStreamGrant } from "../shared/devices";
 import { deviceHubUrl, type DeviceOrientation } from "./device-stream";
 
@@ -35,9 +36,6 @@ export interface DeviceAxTree {
 }
 
 export const DEVICE_AX_ELEMENT_LIMIT = 500;
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const numberOr = (value: unknown, fallback: number) =>
   typeof value === "number" && Number.isFinite(value) ? value : fallback;

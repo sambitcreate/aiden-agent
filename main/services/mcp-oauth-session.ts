@@ -1,4 +1,5 @@
 import { parseMcpOAuthMetadataUrl } from "../../renderer/shared/mcp-oauth-config.js";
+import { isRecord } from "../shared/guards.js";
 import {
   type OAuthClientInformationMixed,
   type OAuthDiscoveryState,
@@ -57,10 +58,6 @@ export const MCP_REJECTED_REFRESH_RESTORE_MS = 5 * 60_000;
 
 function refreshTokenHash(refreshToken: string): string {
   return createHash("sha256").update(refreshToken).digest("hex");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 /** Validate decrypted session structure while retaining compatible future fields. */

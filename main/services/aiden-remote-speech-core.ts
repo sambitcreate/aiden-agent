@@ -3,6 +3,7 @@ import type { AppSettings } from "./types.js";
 import type { LocalModel, LocalModelDownloadState } from "./local-speech-downloads.js";
 import type { UsageRequestRecord } from "./usage-store-core.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { hasExactKeys, isRecord } from "../shared/guards.js";
 import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import { validateAidenRemotePcm16Base64 } from "./aiden-remote-speech-codec.js";
 import { AidenRemoteSpeechLane } from "./aiden-remote-speech-lane.js";
@@ -27,16 +28,14 @@ export interface AidenRemoteSpeechStatus {
 }
 
 function record(value: unknown, message: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     throw new AidenRemoteServiceError("invalid_request", message, 400);
   }
-  return value as Record<string, unknown>;
+  return value;
 }
 
-function exactKeys(value: Record<string, unknown>, keys: readonly string[], message: string): void {
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
+function assertExactSpeechKeys(value: Record<string, unknown>, keys: readonly string[], message: string): void {
+  if (!hasExactKeys(value, keys)) {
     throw new AidenRemoteServiceError("invalid_request", message, 400);
   }
 }
@@ -104,7 +103,7 @@ export class AidenRemoteSpeechServiceCore {
 
   async select(input: unknown): Promise<AidenRemoteSpeechStatus> {
     const value = record(input, "A speech model selection is required.");
-    exactKeys(value, ["modelId"], "A speech model selection must contain only modelId.");
+    assertExactSpeechKeys(value, ["modelId"], "A speech model selection must contain only modelId.");
     const id = modelId(value.modelId);
     const model = this.dependencies.listModels().find((candidate) => candidate.id === id);
     if (!model) throw new AidenRemoteServiceError("not_found", "That speech model is unavailable.", 404);
@@ -145,7 +144,7 @@ export class AidenRemoteSpeechServiceCore {
 
   async transcribe(input: unknown): Promise<{ text: string; modelId: string }> {
     const value = record(input, "A speech recording is required.");
-    exactKeys(value, ["encoding", "sampleRate", "channels", "pcmBase64", "modelId"], "The speech recording contract is invalid.");
+    assertExactSpeechKeys(value, ["encoding", "sampleRate", "channels", "pcmBase64", "modelId"], "The speech recording contract is invalid.");
     if (value.encoding !== "pcm_s16le" || value.sampleRate !== SAMPLE_RATE || value.channels !== 1) {
       throw new AidenRemoteServiceError("invalid_request", "Speech audio must be 16 kHz mono signed 16-bit little-endian PCM.", 400);
     }

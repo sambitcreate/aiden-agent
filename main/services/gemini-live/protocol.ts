@@ -1,4 +1,5 @@
 import { Modality, ThinkingLevel } from "@google/genai";
+import { hasExactKeys, isRecord } from "../../shared/guards.js";
 import { writeDiagnosticEvent } from "../diagnostic-journal.js";
 import type {
   Content,
@@ -239,17 +240,6 @@ export class GeminiLiveProtocolFailure extends Error {
   ) {
     super(SAFE_ERROR_MESSAGES[code]);
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function hasOnlyKeys(
-  value: Record<string, unknown>,
-  allowed: ReadonlySet<string>,
-): boolean {
-  return Object.keys(value).every((key) => allowed.has(key));
 }
 
 function keys(...values: string[]): ReadonlySet<string> {
@@ -947,7 +937,7 @@ export class GeminiLiveProtocol {
         this.malformedStage = "setup_complete";
         if (
           !isRecord(message.setupComplete) ||
-          !hasOnlyKeys(message.setupComplete, SETUP_COMPLETE_KEYS)
+          !hasExactKeys(message.setupComplete, [], SETUP_COMPLETE_KEYS)
         ) {
           this.malformed();
         }
@@ -958,8 +948,9 @@ export class GeminiLiveProtocol {
           ) ||
           (message.setupComplete.voiceConsentSignature !== undefined &&
             (!isRecord(message.setupComplete.voiceConsentSignature) ||
-              !hasOnlyKeys(
+              !hasExactKeys(
                 message.setupComplete.voiceConsentSignature,
+                [],
                 VOICE_CONSENT_KEYS,
               ) ||
               !boundedOptionalString(
@@ -1015,7 +1006,7 @@ export class GeminiLiveProtocol {
         }
         if (field === "voiceActivity") {
           if (
-            !hasOnlyKeys(metadata, VOICE_ACTIVITY_KEYS) ||
+            !hasExactKeys(metadata, [], VOICE_ACTIVITY_KEYS) ||
             [metadata.type, metadata.voiceActivityType].some(
               (type) =>
                 type !== undefined &&
@@ -1025,7 +1016,7 @@ export class GeminiLiveProtocol {
           )
             this.malformed();
         } else if (
-          !hasOnlyKeys(metadata, VAD_SIGNAL_KEYS) ||
+          !hasExactKeys(metadata, [], VAD_SIGNAL_KEYS) ||
           (metadata.vadSignalType !== undefined &&
             (typeof metadata.vadSignalType !== "string" ||
               !VAD_SIGNAL_TYPES.has(metadata.vadSignalType)))
@@ -1067,7 +1058,7 @@ export class GeminiLiveProtocol {
   private handleServerContent(
     content: NonNullable<LiveServerMessage["serverContent"]>,
   ): void {
-    if (!isRecord(content) || !hasOnlyKeys(content, SERVER_CONTENT_KEYS)) {
+    if (!isRecord(content) || !hasExactKeys(content, [], SERVER_CONTENT_KEYS)) {
       this.malformed();
       return;
     }
@@ -1119,7 +1110,7 @@ export class GeminiLiveProtocol {
       this.malformedStage = "server_content_model_turn";
       if (
         !isRecord(modelTurn) ||
-        !hasOnlyKeys(modelTurn, MODEL_TURN_KEYS) ||
+        !hasExactKeys(modelTurn, [], MODEL_TURN_KEYS) ||
         (modelTurn.role !== undefined && modelTurn.role !== "model")
       ) {
         this.malformed();
@@ -1177,7 +1168,7 @@ export class GeminiLiveProtocol {
 
   private handleServerPart(part: unknown): void {
     this.malformedStage = "server_part";
-    if (!isRecord(part) || !hasOnlyKeys(part, SERVER_PART_KEYS)) {
+    if (!isRecord(part) || !hasExactKeys(part, [], SERVER_PART_KEYS)) {
       this.malformed();
       return;
     }
@@ -1231,7 +1222,7 @@ export class GeminiLiveProtocol {
     }
     if (
       !isRecord(part.inlineData) ||
-      !hasOnlyKeys(part.inlineData, INLINE_DATA_KEYS)
+      !hasExactKeys(part.inlineData, [], INLINE_DATA_KEYS)
     ) {
       this.malformed();
       return;
@@ -1291,7 +1282,7 @@ export class GeminiLiveProtocol {
     this.malformedStage = "transcription";
     if (
       !isRecord(value) ||
-      !hasOnlyKeys(value, TRANSCRIPTION_KEYS) ||
+      !hasExactKeys(value, [], TRANSCRIPTION_KEYS) ||
       (value.text !== undefined &&
         (typeof value.text !== "string" ||
           utf8Bytes(value.text) > MAX_TEXT_BYTES))
@@ -1322,7 +1313,7 @@ export class GeminiLiveProtocol {
         value.words.some(
           (word) =>
             !isRecord(word) ||
-            !hasOnlyKeys(word, WORD_INFO_KEYS) ||
+            !hasExactKeys(word, [], WORD_INFO_KEYS) ||
             !boundedOptionalString(word.word, MAX_PROVIDER_IDENTIFIER_BYTES) ||
             !validDuration(word.startOffset) ||
             !validDuration(word.endOffset),
@@ -1353,7 +1344,7 @@ export class GeminiLiveProtocol {
   private handleToolCalls(value: unknown): void {
     if (
       !isRecord(value) ||
-      !hasOnlyKeys(value, TOOL_CALL_KEYS) ||
+      !hasExactKeys(value, [], TOOL_CALL_KEYS) ||
       !Array.isArray(value.functionCalls)
     ) {
       this.malformed();
@@ -1370,7 +1361,7 @@ export class GeminiLiveProtocol {
     for (const call of value.functionCalls) {
       if (
         !isRecord(call) ||
-        !hasOnlyKeys(call, FUNCTION_CALL_KEYS) ||
+        !hasExactKeys(call, [], FUNCTION_CALL_KEYS) ||
         !validToolIdentity(call.id, call.name) ||
         !isRecord(call.args)
       ) {
@@ -1405,7 +1396,7 @@ export class GeminiLiveProtocol {
   private handleToolCallCancellation(value: unknown): void {
     if (
       !isRecord(value) ||
-      !hasOnlyKeys(value, TOOL_CANCELLATION_KEYS) ||
+      !hasExactKeys(value, [], TOOL_CANCELLATION_KEYS) ||
       !Array.isArray(value.ids) ||
       value.ids.length === 0 ||
       value.ids.length > MAX_TOOL_CALLS_PER_EVENT
@@ -1434,7 +1425,7 @@ export class GeminiLiveProtocol {
   private handleUsage(value: unknown): void {
     if (
       !isRecord(value) ||
-      !hasOnlyKeys(value, USAGE_KEYS) ||
+      !hasExactKeys(value, [], USAGE_KEYS) ||
       Object.keys(value).length === 0
     ) {
       this.malformed();
@@ -1469,7 +1460,7 @@ export class GeminiLiveProtocol {
   private handleResumptionUpdate(value: unknown): void {
     if (
       !isRecord(value) ||
-      !hasOnlyKeys(value, RESUMPTION_KEYS) ||
+      !hasExactKeys(value, [], RESUMPTION_KEYS) ||
       typeof value.resumable !== "boolean" ||
       (!value.resumable &&
         value.newHandle !== undefined &&
@@ -1508,7 +1499,7 @@ export class GeminiLiveProtocol {
   }
 
   private handleGoAway(value: unknown): void {
-    if (!isRecord(value) || !hasOnlyKeys(value, GO_AWAY_KEYS)) {
+    if (!isRecord(value) || !hasExactKeys(value, [], GO_AWAY_KEYS)) {
       this.malformed();
       return;
     }

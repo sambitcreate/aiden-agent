@@ -1,3 +1,5 @@
+import { hasExactKeys, isRecord } from "../../main/shared/guards.js";
+
 /**
  * Frequency-first schedule for a Bot routine. People pick one of these in the
  * routine editor; main derives the cron expression, so raw cron never reaches
@@ -25,9 +27,8 @@ function invalid(): never {
   throw new Error("Invalid routine schedule.");
 }
 
-function exactKeys(record: Record<string, unknown>, keys: readonly string[]): void {
-  const actual = Object.keys(record);
-  if (actual.length !== keys.length || !actual.every((key) => keys.includes(key))) invalid();
+function assertScheduleKeys(record: Record<string, unknown>, keys: readonly string[]): void {
+  if (!hasExactKeys(record, keys)) invalid();
 }
 
 export function parseBotRoutineTime(value: unknown): { hour: number; minute: number } {
@@ -52,16 +53,16 @@ export function parseBotRoutineDate(value: unknown): { year: number; month: numb
 
 /** Strict parser for untrusted (IPC, Remote, tool) schedule input. */
 export function parseBotRoutineSchedule(value: unknown): BotRoutineSchedule {
-  if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
-  const record = value as Record<string, unknown>;
+  if (!isRecord(value)) invalid();
+  const record = value;
   switch (record.kind) {
     case "daily":
     case "weekdays":
-      exactKeys(record, ["kind", "time"]);
+      assertScheduleKeys(record, ["kind", "time"]);
       parseBotRoutineTime(record.time);
       return { kind: record.kind, time: record.time as string };
     case "weekly": {
-      exactKeys(record, ["kind", "days", "time"]);
+      assertScheduleKeys(record, ["kind", "days", "time"]);
       parseBotRoutineTime(record.time);
       if (!Array.isArray(record.days) || record.days.length === 0 || record.days.length > 7) invalid();
       const days = new Set<number>();
@@ -72,7 +73,7 @@ export function parseBotRoutineSchedule(value: unknown): BotRoutineSchedule {
       return { kind: "weekly", days: [...days].sort((a, b) => a - b), time: record.time as string };
     }
     case "monthly":
-      exactKeys(record, ["kind", "day", "time"]);
+      assertScheduleKeys(record, ["kind", "day", "time"]);
       parseBotRoutineTime(record.time);
       if (
         typeof record.day !== "number" ||
@@ -84,7 +85,7 @@ export function parseBotRoutineSchedule(value: unknown): BotRoutineSchedule {
       }
       return { kind: "monthly", day: record.day, time: record.time as string };
     case "once":
-      exactKeys(record, ["kind", "date", "time"]);
+      assertScheduleKeys(record, ["kind", "date", "time"]);
       parseBotRoutineTime(record.time);
       parseBotRoutineDate(record.date);
       return { kind: "once", date: record.date as string, time: record.time as string };

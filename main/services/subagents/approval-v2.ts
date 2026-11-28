@@ -4,6 +4,7 @@ import { isSafeSubagentIdentifier } from "../../../renderer/shared/subagent-runs
 import { subagentAuthorityDigestV2, type SubagentAuthorityV2 } from "./authority-v2.js";
 import type { WorkspacePermission } from "../types.js";
 import { planActionGate } from "../approval-gate/gate.js";
+import { isPlainObject } from "../../shared/guards.js";
 
 export type SubagentRunGrantPhaseV2 =
   | "unrequested"
@@ -147,11 +148,6 @@ interface PendingSubagentApprovalV2 {
   authorized: boolean;
 }
 
-function plainRecord(value: object): value is Record<string, unknown> {
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
-
 interface CanonicalState {
   depth: number;
   entries: number;
@@ -242,7 +238,7 @@ function canonicalValue(value: unknown, state: CanonicalState): string {
     });
   }
   if (typeof value === "object") {
-    if (!plainRecord(value)) {
+    if (!isPlainObject(value)) {
       throw new Error("Subagent approval arguments contain an unsupported value.");
     }
     return withCanonicalContainer(value, state, () => {

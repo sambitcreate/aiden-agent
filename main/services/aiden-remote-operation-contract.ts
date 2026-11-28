@@ -1,5 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { types as utilTypes } from "node:util";
+import { isRecord } from "../shared/guards.js";
+import { snapshotExactPlainRecord } from "../shared/plain-record.js";
 import {
   advanceAidenOperation,
   aidenOperationExpiry,
@@ -190,26 +192,8 @@ function isDenseArrayIndexKey(key: string, length: number): boolean {
 }
 
 function assertExactOwnEnumerableDataKeys(value: object, expectedKeys: readonly string[]): void {
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  const keys = Reflect.ownKeys(descriptors);
-  if (
-    keys.length !== expectedKeys.length ||
-    keys.some((key) => typeof key !== "string" || !expectedKeys.includes(key)) ||
-    expectedKeys.some((key) => !Object.prototype.hasOwnProperty.call(descriptors, key))
-  ) {
+  if (!snapshotExactPlainRecord(value, expectedKeys)) {
     throw new AidenOperationContractError("internal_error");
-  }
-  for (const key of expectedKeys) {
-    const descriptor = descriptors[key];
-    if (
-      !descriptor ||
-      descriptor.enumerable !== true ||
-      !("value" in descriptor) ||
-      "get" in descriptor ||
-      "set" in descriptor
-    ) {
-      throw new AidenOperationContractError("internal_error");
-    }
   }
 }
 
@@ -412,7 +396,7 @@ function assertSnapshotErrorCode(value: unknown): asserts value is AidenOperatio
 }
 
 function assertSnapshotEntry(value: unknown): asserts value is AidenIdempotencySnapshotEntry {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     throw new AidenOperationContractError("internal_error");
   }
   cloneDurableJson(value);
@@ -466,7 +450,7 @@ function assertSnapshotEntry(value: unknown): asserts value is AidenIdempotencyS
 }
 
 function assertSnapshot(value: unknown): asserts value is AidenIdempotencySnapshot {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     throw new AidenOperationContractError("internal_error");
   }
   cloneDurableJson(value, DURABLE_SNAPSHOT_JSON_LIMITS);

@@ -1,4 +1,5 @@
 import type { AidenRemoteNewWorktreeOptions } from "./aiden-remote-new-worktree.js";
+import { hasExactKeys, isRecord } from "../shared/guards.js";
 import { parseChatInputSource } from "../../renderer/shared/chat-input-source.js";
 import type { WorkspaceChatAssignment } from "./workspace-application-service.js";
 import { agentNoticeDisplayText, parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
@@ -494,18 +495,6 @@ export interface AidenRemoteBotTurnAuthorityPreflightRequest {
 export type AidenRemoteBotTurnAuthorityPreflight = (
   request: Readonly<AidenRemoteBotTurnAuthorityPreflightRequest>,
 ) => Promise<{ supportsCompanionImages: boolean } | void>;
-
-function ownRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function exactKeys(record: Record<string, unknown>, required: string[], optional: string[] = []): boolean {
-  const allowed = new Set([...required, ...optional]);
-  return required.every((key) => Object.prototype.hasOwnProperty.call(record, key))
-    && Object.keys(record).every((key) => allowed.has(key));
-}
 
 function boundedString(value: unknown, maximum: number): value is string {
   return typeof value === "string" && value.length > 0 && Array.from(value).length <= maximum;
@@ -1073,10 +1062,10 @@ export function projectAidenRemoteChat(
 function parseCreate(
   input: unknown,
 ): { workspaceId: string; providerId?: string; model?: string; noWorkspace?: true } {
-  const record = ownRecord(input);
+  const record = isRecord(input) ? input : null;
   if (
     !record ||
-    !exactKeys(record, ["workspaceId"], ["providerId", "modelId", "noWorkspace"]) ||
+    !hasExactKeys(record, ["workspaceId"], ["providerId", "modelId", "noWorkspace"]) ||
     !boundedString(record.workspaceId, 128) ||
     (record.noWorkspace !== undefined && record.noWorkspace !== true) ||
     (record.providerId !== undefined && !boundedString(record.providerId, 256)) ||
@@ -1093,8 +1082,8 @@ function parseCreate(
 }
 
 function parseTitle(input: unknown): string {
-  const record = ownRecord(input);
-  if (!record || !exactKeys(record, ["title"]) || !boundedString(record.title, 200)) {
+  const record = isRecord(input) ? input : null;
+  if (!record || !hasExactKeys(record, ["title"]) || !boundedString(record.title, 200)) {
     throw new AidenRemoteServiceError("invalid_request", "The chat title is invalid.", 400);
   }
   const title = record.title.trim();
@@ -1105,10 +1094,10 @@ function parseTitle(input: unknown): string {
 }
 
 function parseMove(input: unknown): { workspaceId: string; confirmedForeground: true } {
-  const record = ownRecord(input);
+  const record = isRecord(input) ? input : null;
   if (
     !record ||
-    !exactKeys(record, ["workspaceId", "confirmedForeground"]) ||
+    !hasExactKeys(record, ["workspaceId", "confirmedForeground"]) ||
     !boundedString(record.workspaceId, 128) ||
     record.confirmedForeground !== true
   ) {
@@ -1122,14 +1111,14 @@ type ParsedFork =
   | { continueIn: { workspaceId: string }; messageId?: undefined; position?: undefined; summary?: undefined };
 
 function parseFork(input: unknown): ParsedFork {
-  const record = ownRecord(input);
+  const record = isRecord(input) ? input : null;
   if (record && Object.prototype.hasOwnProperty.call(record, "continueIn")) {
     // Revision 64: the whole conversation, into another workspace.
-    const continueIn = ownRecord(record.continueIn);
+    const continueIn = isRecord(record.continueIn) ? record.continueIn : null;
     if (
-      !exactKeys(record, ["continueIn"]) ||
+      !hasExactKeys(record, ["continueIn"]) ||
       !continueIn ||
-      !exactKeys(continueIn, ["workspaceId"]) ||
+      !hasExactKeys(continueIn, ["workspaceId"]) ||
       !boundedString(continueIn.workspaceId, 128) ||
       !SAFE_ID.test(continueIn.workspaceId)
     ) {
@@ -1137,15 +1126,15 @@ function parseFork(input: unknown): ParsedFork {
     }
     return { continueIn: { workspaceId: continueIn.workspaceId } };
   }
-  const summary = record?.summary === undefined ? undefined : ownRecord(record.summary);
+  const summary = record?.summary === undefined ? undefined : (isRecord(record.summary) ? record.summary : null);
   const focus = summary?.focus;
   if (
     !record ||
-    !exactKeys(record, ["messageId", "position"], ["summary"]) ||
+    !hasExactKeys(record, ["messageId", "position"], ["summary"]) ||
     !boundedString(record.messageId, 128) ||
     !SAFE_ID.test(record.messageId) ||
     (record.position !== "after" && record.position !== "before") ||
-    (record.summary !== undefined && (!summary || !exactKeys(summary, [], ["focus"]))) ||
+    (record.summary !== undefined && (!summary || !hasExactKeys(summary, [], ["focus"]))) ||
     (focus !== undefined &&
       (typeof focus !== "string" ||
         !focus.trim() ||
@@ -1206,10 +1195,10 @@ export interface AidenRemoteChatForkResult {
 }
 
 function parseMarkRead(input: unknown): { throughMessageId?: string } {
-  const record = ownRecord(input);
+  const record = isRecord(input) ? input : null;
   if (
     !record ||
-    !exactKeys(record, hasOwnKey(record, "throughMessageId") ? ["throughMessageId"] : []) ||
+    !hasExactKeys(record, hasOwnKey(record, "throughMessageId") ? ["throughMessageId"] : []) ||
     (hasOwnKey(record, "throughMessageId") && !boundedString(record.throughMessageId, 128))
   ) {
     throw new AidenRemoteServiceError("invalid_request", "The chat read request is invalid.", 400);
@@ -1228,8 +1217,8 @@ const RFC3339_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-
  */
 export function parseAidenRemoteChatTriage(input: unknown): { patch: ChatTriagePatch; ifRevision?: number } {
   const invalid = () => new AidenRemoteServiceError("invalid_request", "The chat triage request is invalid.", 400);
-  const record = ownRecord(input);
-  if (!record || !exactKeys(record, [], ["pinned", "done", "snoozeUntil", "restoreDoneAt", "ifRevision"])) throw invalid();
+  const record = isRecord(input) ? input : null;
+  if (!record || !hasExactKeys(record, [], ["pinned", "done", "snoozeUntil", "restoreDoneAt", "ifRevision"])) throw invalid();
   const patch: ChatTriagePatch = {};
   if (hasOwnKey(record, "pinned")) {
     if (typeof record.pinned !== "boolean") throw invalid();
@@ -1276,7 +1265,7 @@ function parseTurn(input: unknown): {
   skill?: SkillInvocationV1;
   saveSelection?: true;
 } {
-  const record = ownRecord(input);
+  const record = isRecord(input) ? input : null;
   const attachmentIds = record?.attachmentIds;
   const structurallyValidAttachmentIds =
     attachmentIds === undefined ||
@@ -1286,7 +1275,7 @@ function parseTurn(input: unknown): {
       attachmentIds.every((value) => typeof value === "string"));
   if (
     !record ||
-    !exactKeys(record, ["text"], ["providerId", "modelId", "thinkingLevel", "attachmentIds", "skill", "saveSelection"]) ||
+    !hasExactKeys(record, ["text"], ["providerId", "modelId", "thinkingLevel", "attachmentIds", "skill", "saveSelection"]) ||
     typeof record.text !== "string" ||
     Array.from(record.text).length > 200_000 ||
     (!record.text.trim() && (!Array.isArray(attachmentIds) || attachmentIds.length === 0)) ||

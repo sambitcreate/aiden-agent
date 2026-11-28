@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { types as utilTypes } from "node:util";
 import {
   isSafeSubagentIdentifier,
   type SubagentEffectActivityV1,
 } from "../../../renderer/shared/subagent-runs.js";
+import { hasExactKeys } from "../../shared/guards.js";
+import { snapshotPlainRecord } from "../../shared/plain-record.js";
 
 export const MAX_DURABLE_SUBAGENT_EFFECTS = 512;
 const DIGEST = /^[a-f0-9]{64}$/u;
@@ -88,42 +89,6 @@ export interface FinishDurableSubagentEffectV2Input extends DurableSubagentEffec
   terminalDigest: string;
 }
 
-function snapshotPlainRecord(value: unknown): Record<string, unknown> | undefined {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    Array.isArray(value) ||
-    utilTypes.isProxy(value)
-  ) return undefined;
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return undefined;
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  const snapshot: Record<string, unknown> = {};
-  for (const key of Reflect.ownKeys(descriptors)) {
-    if (typeof key !== "string") return undefined;
-    const descriptor = descriptors[key];
-    if (!descriptor || descriptor.enumerable !== true || !("value" in descriptor)) {
-      return undefined;
-    }
-    snapshot[key] = descriptor.value;
-  }
-  return snapshot;
-}
-
-function exactKeys(
-  value: Record<string, unknown>,
-  required: readonly string[],
-  optional: readonly string[] = [],
-): boolean {
-  const keys = Object.keys(value);
-  return (
-    keys.length >= required.length &&
-    keys.length <= required.length + optional.length &&
-    required.every((key) => key in value) &&
-    keys.every((key) => required.includes(key) || optional.includes(key))
-  );
-}
-
 function timestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
@@ -142,7 +107,7 @@ export function parsePrepareDurableSubagentEffectV2Input(
   const record = snapshotPlainRecord(value);
   if (
     !record ||
-    !exactKeys(record, [
+    !hasExactKeys(record, [
       "approvalId",
       "effectId",
       "runId",
@@ -182,7 +147,7 @@ export function parseDurableSubagentEffectOwnerV2(
   const record = snapshotPlainRecord(value);
   if (
     !record ||
-    !exactKeys(record, ["effectId", "approvalId", "runId", "chatId"]) ||
+    !hasExactKeys(record, ["effectId", "approvalId", "runId", "chatId"]) ||
     !identities(record, ["effectId", "approvalId", "runId", "chatId"])
   ) {
     return undefined;
@@ -196,7 +161,7 @@ export function parseFinishDurableSubagentEffectV2Input(
   const record = snapshotPlainRecord(value);
   if (
     !record ||
-    !exactKeys(record, ["effectId", "approvalId", "runId", "chatId", "state", "terminalDigest"]) ||
+    !hasExactKeys(record, ["effectId", "approvalId", "runId", "chatId", "state", "terminalDigest"]) ||
     !identities(record, ["effectId", "approvalId", "runId", "chatId"]) ||
     (record.state !== "completed" && record.state !== "remote_error" && record.state !== "unknown") ||
     !digest(record.terminalDigest)
@@ -212,7 +177,7 @@ export function parseDurableSubagentApprovalV2(
   const record = snapshotPlainRecord(value);
   if (
     !record ||
-    !exactKeys(record, [
+    !hasExactKeys(record, [
       "version",
       "approvalId",
       "effectId",
@@ -265,7 +230,7 @@ export function parseDurableSubagentEffectV2(value: unknown): DurableSubagentEff
   const record = snapshotPlainRecord(value);
   if (
     !record ||
-    !exactKeys(
+    !hasExactKeys(
       record,
       [
         "version",

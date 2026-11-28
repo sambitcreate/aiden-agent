@@ -26,6 +26,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { AgentMessage, AgentTool, AfterToolCallContext, AfterToolCallResult } from "@earendil-works/pi-agent-core";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import { fenceAsData } from "../../renderer/shared/agent-notices.js";
+import { isRecord } from "../shared/guards.js";
 import { getHookDispatcher } from "./hooks/index.js";
 import type {
   HookDispatchContext,
@@ -222,10 +223,6 @@ export function hookContextCustomMessage(text: string): {
 /** `hookContextCustomMessage` as the journaled message that follows the prompt sent at `timestamp`. */
 export function hookContextMessage(text: string, timestamp: number): AgentMessage {
   return { role: "custom", ...hookContextCustomMessage(text), timestamp };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Replace `target`'s own keys with `next`'s, keeping the same object the tool will run with. */

@@ -3,6 +3,7 @@ import { types as utilTypes } from "node:util";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { WorkspacePermission } from "../types.js";
 import { isSafeSubagentIdentifier } from "../../../renderer/shared/subagent-runs.js";
+import { hasExactKeys, isRecord } from "../../shared/guards.js";
 import { parseSubagentToolRequest, type SubagentTaskRequest } from "./contracts.js";
 
 export const SUBAGENT_AUTHORITY_VERSION = 2 as const;
@@ -204,10 +205,6 @@ const BUDGET_KEYS = [
   "maxNetworkOperations",
 ] as const;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 export function subagentMcpEffectProfileFingerprintV2(
   profile: Omit<SubagentMcpMutationEffectProfileV2, "fingerprint">,
 ): string {
@@ -279,11 +276,6 @@ export function parseSubagentMcpMutationEffectProfileV2(
     throw new Error("Invalid or stale subagent MCP mutation effect profile.");
   }
   return { ...profile, fingerprint: field("fingerprint") as string };
-}
-
-function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value);
-  return actual.length === keys.length && actual.every((key) => keys.includes(key));
 }
 
 function boundedPositiveInteger(value: unknown, maximum: number, field: string): number {

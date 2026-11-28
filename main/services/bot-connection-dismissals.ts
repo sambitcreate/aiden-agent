@@ -3,6 +3,7 @@
 // Guarded JSON: an unreadable or newer-shaped file is kept, never overwritten.
 
 import { BOT_LIMITS } from "../../renderer/shared/bots.js";
+import { isRecord } from "../shared/guards.js";
 import { DataStore } from "./data-store.js";
 
 export const BOT_CONNECTION_DISMISSALS_FILE = "bot-connection-dismissals.json";
@@ -38,10 +39,6 @@ function isPluginId(value: string): boolean {
 
 function hasOwn(value: object, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Strict parse; undefined when any part is not the current shape. */

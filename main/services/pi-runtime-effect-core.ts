@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { types as utilTypes } from "node:util";
+import { hasExactKeys } from "../shared/guards.js";
+import { snapshotPlainRecord } from "../shared/plain-record.js";
 import type { PiRuntimeReplayPolicy } from "./pi-runtime-tool.js";
 
 export type { PiRuntimeReplayPolicy } from "./pi-runtime-tool.js";
@@ -110,49 +112,6 @@ export interface DurablePiRuntimeEffectDatabase {
   effects: DurablePiRuntimeEffect[];
 }
 
-function plainRecord(value: unknown): Record<string, unknown> | undefined {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    Array.isArray(value) ||
-    utilTypes.isProxy(value)
-  ) {
-    return undefined;
-  }
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return undefined;
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  const result: Record<string, unknown> = {};
-  for (const key of Reflect.ownKeys(descriptors)) {
-    if (typeof key !== "string") return undefined;
-    const descriptor = descriptors[key];
-    if (!descriptor || descriptor.enumerable !== true || !("value" in descriptor)) {
-      return undefined;
-    }
-    Object.defineProperty(result, key, {
-      value: descriptor.value,
-      enumerable: true,
-      configurable: true,
-      writable: true,
-    });
-  }
-  return result;
-}
-
-function exactKeys(
-  value: Record<string, unknown>,
-  required: readonly string[],
-  optional: readonly string[] = [],
-): boolean {
-  const keys = Object.keys(value);
-  return (
-    keys.length >= required.length &&
-    keys.length <= required.length + optional.length &&
-    required.every((key) => key in value) &&
-    keys.every((key) => required.includes(key) || optional.includes(key))
-  );
-}
-
 export function isSafePiRuntimeIdentity(value: unknown): value is string {
   if (
     typeof value !== "string" ||
@@ -256,7 +215,7 @@ function snapshotJson(
         return snapshotJson(descriptor.value, state, depth + 1);
       });
     }
-    const record = plainRecord(value);
+    const record = snapshotPlainRecord(value);
     if (!record) throw new Error("Pi runtime effect arguments are not a plain object.");
     const result: Record<string, PiRuntimeJson> = {};
     for (const key of Object.keys(record).sort()) {
@@ -363,7 +322,7 @@ export function digestPiRuntimeEffectArguments(value: unknown): string {
         hash.update("]");
         return;
       }
-      const record = plainRecord(current);
+      const record = snapshotPlainRecord(current);
       if (!record) throw new Error("Pi runtime effect arguments are not a plain object.");
       const keys = Object.keys(record).sort();
       hash.update(`o${keys.length}{`, "utf8");
@@ -393,10 +352,10 @@ export function piRuntimeTerminalDigest(label: string): string {
 export function parseStartPiRuntimeOperationInput(
   value: unknown,
 ): StartPiRuntimeOperationInput | undefined {
-  const record = plainRecord(value);
+  const record = snapshotPlainRecord(value);
   if (
     !record ||
-    !exactKeys(record, [
+    !hasExactKeys(record, [
       "operationId",
       "runId",
       "sessionId",
@@ -418,10 +377,10 @@ export function parseStartPiRuntimeOperationInput(
 export function parseDurablePiRuntimeEffectOwner(
   value: unknown,
 ): DurablePiRuntimeEffectOwner | undefined {
-  const record = plainRecord(value);
+  const record = snapshotPlainRecord(value);
   if (
     !record ||
-    !exactKeys(record, ["effectId", "operationId", "runId", "chatId"]) ||
+    !hasExactKeys(record, ["effectId", "operationId", "runId", "chatId"]) ||
     ![record.effectId, record.operationId, record.runId, record.chatId].every(
       isSafePiRuntimeIdentity,
     )
@@ -434,10 +393,10 @@ export function parseDurablePiRuntimeEffectOwner(
 export function parseDurablePiRuntimeOperation(
   value: unknown,
 ): DurablePiRuntimeOperation | undefined {
-  const record = plainRecord(value);
+  const record = snapshotPlainRecord(value);
   if (
     !record ||
-    !exactKeys(record, [
+    !hasExactKeys(record, [
       "version",
       "operationId",
       "runId",
@@ -466,10 +425,10 @@ export function parseDurablePiRuntimeOperation(
 }
 
 export function parseDurablePiRuntimeEffect(value: unknown): DurablePiRuntimeEffect | undefined {
-  const record = plainRecord(value);
+  const record = snapshotPlainRecord(value);
   if (
     !record ||
-    !exactKeys(
+    !hasExactKeys(
       record,
       [
         "version",
@@ -537,10 +496,10 @@ export function parseDurablePiRuntimeEffect(value: unknown): DurablePiRuntimeEff
 export function parseDurablePiRuntimeEffectDatabase(
   value: unknown,
 ): DurablePiRuntimeEffectDatabase | undefined {
-  const record = plainRecord(value);
+  const record = snapshotPlainRecord(value);
   if (
     !record ||
-    !exactKeys(record, ["version", "revision", "operations", "effects"]) ||
+    !hasExactKeys(record, ["version", "revision", "operations", "effects"]) ||
     record.version !== 1 ||
     !nonnegativeInteger(record.revision) ||
     !Array.isArray(record.operations) ||

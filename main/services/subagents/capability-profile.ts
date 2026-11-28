@@ -1,3 +1,4 @@
+import { isRecord } from "../../shared/guards.js";
 import type { WorkspacePermission } from "../types.js";
 
 export const SUBAGENT_ROLES = ["scout", "planner", "reviewer", "implementer"] as const;
@@ -38,10 +39,6 @@ export function inheritedSubagentReadToolCeiling(
   excludedToolNames: ReadonlySet<string> | undefined,
 ): readonly SubagentReadToolName[] {
   return SUBAGENT_READ_TOOL_NAMES.filter((name) => !excludedToolNames?.has(name));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function optionalStringArray(

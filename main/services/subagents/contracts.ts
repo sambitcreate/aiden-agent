@@ -7,7 +7,7 @@ import { isSubagentRole, type SubagentRole } from "./capability-profile.js";
 import { isSubagentModelKey } from "./subagent-model-selection.js";
 import type { SubagentContextMode } from "./forked-context.js";
 import { normalizeSubagentModelText } from "./model-text.js";
-import { types as utilTypes } from "node:util";
+import { snapshotExactPlainRecord } from "../../shared/plain-record.js";
 
 export const MAX_SUBAGENT_TASKS_PER_CALL = 4;
 export const MAX_SUBAGENT_LAUNCHES_PER_GENERATION = 8;
@@ -73,43 +73,6 @@ export interface SubagentTaskResult {
   warning?: string;
 }
 
-function exactPlainDataRecord(
-  value: unknown,
-  keys: readonly string[],
-  optional: readonly string[] = [],
-): Record<string, unknown> | undefined {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    Array.isArray(value) ||
-    utilTypes.isProxy(value)
-  ) {
-    return undefined;
-  }
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return undefined;
-  const descriptors = Object.getOwnPropertyDescriptors(value) as Record<
-    PropertyKey,
-    PropertyDescriptor
-  >;
-  const actual = Reflect.ownKeys(descriptors);
-  if (
-    keys.some((key) => !Object.prototype.hasOwnProperty.call(descriptors, key)) ||
-    actual.length < keys.length ||
-    actual.length > keys.length + optional.length ||
-    actual.some(
-      (key) =>
-        typeof key !== "string" ||
-        (!keys.includes(key) && !optional.includes(key)) ||
-        !("value" in descriptors[key]!) ||
-        descriptors[key]!.enumerable !== true,
-    )
-  ) {
-    return undefined;
-  }
-  return Object.fromEntries((actual as string[]).map((key) => [key, descriptors[key]!.value]));
-}
-
 function hasDisallowedLabelCharacter(value: string): boolean {
   return Array.from(value).some((character) => {
     const codePoint = character.codePointAt(0) ?? 0;
@@ -159,7 +122,7 @@ function boundedIdentifier(value: unknown, field: string): string {
 }
 
 function parseRequestedCapabilities(value: unknown): SubagentRequestedCapabilities {
-  const input = exactPlainDataRecord(
+  const input = snapshotExactPlainRecord(
     value,
     ["workspaceRead", "web", "mcp"],
     ["workspaceWrite", "shell", "delegate", "mcpMutations"],
@@ -184,7 +147,7 @@ function parseRequestedCapabilities(value: unknown): SubagentRequestedCapabiliti
   const parseLane = (lane: readonly unknown[], label: string) => {
     const serverIds = new Set<string>();
     return lane.map((entry) => {
-      const scope = exactPlainDataRecord(entry, ["serverId", "tools"]);
+      const scope = snapshotExactPlainRecord(entry, ["serverId", "tools"]);
       if (
         !scope ||
         !Array.isArray(scope.tools) ||
@@ -352,7 +315,7 @@ function inferRootCapabilities(
 /** Revalidate model arguments independently of TypeBox/provider schema enforcement. */
 export function parseSubagentToolRequest(input: unknown): SubagentToolRequest {
   // `action: "run"` is the declared default; "list" never reaches here.
-  const request = exactPlainDataRecord(input, ["tasks"], ["action", "context", "capabilities"]);
+  const request = snapshotExactPlainRecord(input, ["tasks"], ["action", "context", "capabilities"]);
   if (
     !request ||
     (request.action !== undefined && request.action !== "run") ||
@@ -369,7 +332,7 @@ export function parseSubagentToolRequest(input: unknown): SubagentToolRequest {
       ? undefined
       : parseRequestedCapabilities(request.capabilities);
   const parsedTasks = request.tasks.map((entry) => {
-    const task = exactPlainDataRecord(entry, ["role", "label", "task"], ["capabilities", "maxTurns", "model", "effort"]);
+    const task = snapshotExactPlainRecord(entry, ["role", "label", "task"], ["capabilities", "maxTurns", "model", "effort"]);
     if (!task) throw new Error("Invalid subagent task fields.");
     if (typeof task.role !== "string" || !isSubagentRole(task.role)) {
       throw new Error("Unknown subagent role.");

@@ -11,12 +11,12 @@ import {
   isCoalescibleDelta,
   MAX_COALESCED_DELTA_EVENT_BYTES,
   mergeDeltaPayload,
-  ownRecord,
   projectApprovalDetails,
   projectRunContentNotification,
   type RunContentProjection,
   type RunProjectionState,
 } from "./run-event-projection.js";
+import { isRecord } from "../shared/guards.js";
 
 export type HostRunOrigin = "renderer" | "remote" | "headless";
 export type HostRunState =
@@ -209,7 +209,7 @@ function approvalEvent(
   // Details pass the same allowlist as Remote approvals: unrecognized kinds and
   // undeclared fields (such as classifier state) are never journaled, so no
   // observer of this host can read them.
-  const supplied = ownRecord(payload.details) !== null;
+  const supplied = isRecord(payload.details);
   const details = projectApprovalDetails(payload.details);
   if (!details) {
     return {
@@ -329,7 +329,7 @@ export class HostRunRegistry {
     let approvalId: string | undefined;
     let questionId: string | undefined;
     try {
-      const payload = ownRecord(rawPayload) ?? {};
+      const payload = isRecord(rawPayload) ? rawPayload : {};
       if (channel === "chat:approval") {
         approvalId = promptId(payload.approvalId);
         if (!approvalId || this.promptRuns.has(approvalId)) return;

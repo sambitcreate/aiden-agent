@@ -43,6 +43,7 @@ import {
   remoteNodeBootstrap,
   type SshDeviceScriptMode,
 } from "./ssh-device-script.js";
+import { isRecord } from "../../shared/guards.js";
 
 export const SSH_START_TIMEOUT_MS = 22 * 60_000;
 export const SSH_PROBE_TIMEOUT_MS = 45_000;
@@ -187,10 +188,6 @@ export function sshFailureMessage(label: string, result: SshCommandResult): stri
     return `Could not connect to ${label} over SSH${detail ? `: ${detail}` : "."}`;
   }
   return detail || `The command on ${label} failed (exit code ${result.code}).`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function parsePlatforms(value: unknown): DeviceHostPlatformCheck[] | null {

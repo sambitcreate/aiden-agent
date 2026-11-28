@@ -1,4 +1,5 @@
 /** Closed guest↔host message contract for inline Generative UI frames. */
+import { hasExactKeys, isRecord } from "../../main/shared/guards.js";
 import { GENERATIVE_UI_ESCAPE_MESSAGE } from "./generative-ui.js";
 
 export const GENERATIVE_UI_RESIZE_MESSAGE = "aiden:generative-ui:resize" as const;
@@ -19,22 +20,17 @@ export type GuestBridgeMessage =
   | { type: "resize"; height: number }
   | { type: "prompt"; text: string };
 
-function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const own = Object.keys(value);
-  return own.length === keys.length && own.every((key) => keys.includes(key));
-}
-
 export function parseGuestBridgeMessage(data: unknown): GuestBridgeMessage | undefined {
   if (data === GENERATIVE_UI_ESCAPE_MESSAGE) return { type: "escape" };
-  if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
-  const record = data as Record<string, unknown>;
-  if (record.type === GENERATIVE_UI_READY_MESSAGE && exactKeys(record, ["type"])) {
+  if (!isRecord(data)) return undefined;
+  const record = data;
+  if (record.type === GENERATIVE_UI_READY_MESSAGE && hasExactKeys(record, ["type"])) {
     return { type: "ready" };
   }
-  if (record.type === GENERATIVE_UI_RESIZE_MESSAGE && exactKeys(record, ["type", "height"])) {
+  if (record.type === GENERATIVE_UI_RESIZE_MESSAGE && hasExactKeys(record, ["type", "height"])) {
     return typeof record.height === "number" ? { type: "resize", height: record.height } : undefined;
   }
-  if (record.type === GENERATIVE_UI_PROMPT_MESSAGE && exactKeys(record, ["type", "text"])) {
+  if (record.type === GENERATIVE_UI_PROMPT_MESSAGE && hasExactKeys(record, ["type", "text"])) {
     return typeof record.text === "string" ? { type: "prompt", text: record.text } : undefined;
   }
   return undefined;

@@ -2,6 +2,7 @@ import { InsufficientDiskSpaceError, WorktreeCapacityUnavailableError } from "./
 import { ManagedWorktreeProcessActiveError } from "./managed-worktree-cleanup-errors.js";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
+import { hasExactKeys, isRecord } from "../shared/guards.js";
 import { executeAidenDurableOperation } from "./aiden-remote-durable-operation.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
@@ -144,18 +145,6 @@ function branchesDigest(value: GitBranches): string {
     detached: value.detached ?? false,
     unborn: value.unborn ?? false,
   }));
-}
-
-function ownRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function exactKeys(record: Record<string, unknown>, required: string[]): boolean {
-  return Object.keys(record).length === required.length && required.every(
-    (key) => Object.prototype.hasOwnProperty.call(record, key),
-  );
 }
 
 function boundedString(value: unknown, maximum: number): value is string {
@@ -359,8 +348,8 @@ export class AidenRemoteGitService {
   }
 
   async diff(deviceId: string, workspaceId: string, value: unknown): Promise<AidenRemoteGitResult> {
-    const record = ownRecord(value);
-    if (!record || !exactKeys(record, ["snapshotId", "fileId"]) || !boundedString(record.snapshotId, 128) || !boundedString(record.fileId, 128)) {
+    const record = isRecord(value) ? value : null;
+    if (!record || !hasExactKeys(record, ["snapshotId", "fileId"]) || !boundedString(record.snapshotId, 128) || !boundedString(record.fileId, 128)) {
       throw new AidenRemoteServiceError("invalid_request", "The Git diff request is invalid.", 400);
     }
     const snapshot = this.snapshot(deviceId, workspaceId, record.snapshotId, "review");
@@ -417,8 +406,8 @@ export class AidenRemoteGitService {
   }
 
   async checkout(deviceId: string, workspaceId: string, key: string, value: unknown): Promise<AidenRemoteGitResult> {
-    const record = ownRecord(value);
-    if (!record || !exactKeys(record, ["branch", "snapshotId", "confirmedForeground"]) || !boundedString(record.branch, 500) || !boundedString(record.snapshotId, 128)) {
+    const record = isRecord(value) ? value : null;
+    if (!record || !hasExactKeys(record, ["branch", "snapshotId", "confirmedForeground"]) || !boundedString(record.branch, 500) || !boundedString(record.snapshotId, 128)) {
       throw new AidenRemoteServiceError("invalid_request", "The branch checkout request is invalid.", 400);
     }
     requireConfirmation(record);
@@ -446,8 +435,8 @@ export class AidenRemoteGitService {
   }
 
   async createBranch(deviceId: string, workspaceId: string, key: string, value: unknown): Promise<AidenRemoteGitResult> {
-    const record = ownRecord(value);
-    if (!record || !exactKeys(record, ["name", "startPoint", "confirmedForeground"]) || !boundedString(record.name, 200) || !boundedString(record.startPoint, 500)) {
+    const record = isRecord(value) ? value : null;
+    if (!record || !hasExactKeys(record, ["name", "startPoint", "confirmedForeground"]) || !boundedString(record.name, 200) || !boundedString(record.startPoint, 500)) {
       throw new AidenRemoteServiceError("invalid_request", "The branch creation request is invalid.", 400);
     }
     requireConfirmation(record);
@@ -474,10 +463,10 @@ export class AidenRemoteGitService {
   }
 
   async commit(deviceId: string, workspaceId: string, key: string, value: unknown): Promise<AidenRemoteGitResult> {
-    const record = ownRecord(value);
+    const record = isRecord(value) ? value : null;
     if (
       !record ||
-      !exactKeys(record, ["snapshotId", "message", "scope", "confirmedForeground"]) ||
+      !hasExactKeys(record, ["snapshotId", "message", "scope", "confirmedForeground"]) ||
       !boundedString(record.snapshotId, 128) ||
       !boundedString(record.message, 20_000) ||
       (record.scope !== "all-reviewed" && record.scope !== "staged-reviewed")
@@ -542,8 +531,8 @@ export class AidenRemoteGitService {
   }
 
   async push(deviceId: string, workspaceId: string, key: string, value: unknown): Promise<AidenRemoteGitResult> {
-    const record = ownRecord(value);
-    if (!record || !exactKeys(record, ["snapshotId", "remote", "branch", "confirmedForeground"]) || !boundedString(record.snapshotId, 128) || !boundedString(record.remote, 200) || !boundedString(record.branch, 500)) {
+    const record = isRecord(value) ? value : null;
+    if (!record || !hasExactKeys(record, ["snapshotId", "remote", "branch", "confirmedForeground"]) || !boundedString(record.snapshotId, 128) || !boundedString(record.remote, 200) || !boundedString(record.branch, 500)) {
       throw new AidenRemoteServiceError("invalid_request", "The Git push request is invalid.", 400);
     }
     requireConfirmation(record);
@@ -598,8 +587,8 @@ export class AidenRemoteGitService {
   }
 
   async compare(deviceId: string, workspaceId: string, value: unknown): Promise<AidenRemoteGitResult> {
-    const record = ownRecord(value);
-    if (!record || !exactKeys(record, ["baseRef"]) || !boundedString(record.baseRef, 500)) {
+    const record = isRecord(value) ? value : null;
+    if (!record || !hasExactKeys(record, ["baseRef"]) || !boundedString(record.baseRef, 500)) {
       throw new AidenRemoteServiceError("invalid_request", "The Git comparison request is invalid.", 400);
     }
     try {
@@ -624,8 +613,8 @@ export class AidenRemoteGitService {
   }
 
   async comparisonDiff(deviceId: string, workspaceId: string, value: unknown): Promise<AidenRemoteGitResult> {
-    const record = ownRecord(value);
-    if (!record || !exactKeys(record, ["comparisonId", "fileId"]) || !boundedString(record.comparisonId, 128) || !boundedString(record.fileId, 128)) {
+    const record = isRecord(value) ? value : null;
+    if (!record || !hasExactKeys(record, ["comparisonId", "fileId"]) || !boundedString(record.comparisonId, 128) || !boundedString(record.fileId, 128)) {
       throw new AidenRemoteServiceError("invalid_request", "The comparison diff request is invalid.", 400);
     }
     const snapshot = this.snapshot(deviceId, workspaceId, record.comparisonId, "comparison");
@@ -692,10 +681,10 @@ export class AidenRemoteGitService {
     key: string,
     value: unknown,
   ): Promise<AidenRemoteGitResult> {
-    const record = ownRecord(value);
+    const record = isRecord(value) ? value : null;
     if (
       !record ||
-      !exactKeys(record, ["branch", "name", "confirmedForeground"]) ||
+      !hasExactKeys(record, ["branch", "name", "confirmedForeground"]) ||
       !boundedString(record.branch, 500) ||
       !boundedString(record.name, 120)
     ) {
@@ -738,8 +727,8 @@ export class AidenRemoteGitService {
     key: string,
     value: unknown,
   ): Promise<AidenRemoteGitResult> {
-    const record = ownRecord(value);
-    if (!record || !exactKeys(record, ["confirmedForeground"])) {
+    const record = isRecord(value) ? value : null;
+    if (!record || !hasExactKeys(record, ["confirmedForeground"])) {
       throw new AidenRemoteServiceError("invalid_request", "The managed-worktree deletion request is invalid.", 400);
     }
     requireConfirmation(record);

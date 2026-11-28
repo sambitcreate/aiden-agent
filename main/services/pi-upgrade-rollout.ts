@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { chmod, link, lstat, mkdir, open, readFile, readdir, readlink, rename, rm, unlink } from "node:fs/promises";
 import path from "node:path";
+import { hasExactKeys, isRecord } from "../shared/guards.js";
 import type { Chat } from "./types.js";
 import {
   evaluatePiUpgradeReplay,
@@ -51,15 +52,11 @@ export interface PiUpgradeInstalledReceipt {
 
 export interface PiUpgradeInstalledIdentity { packageSha256: string; buildId: string }
 
-function exactKeys(record: Record<string, unknown>, keys: readonly string[]): boolean {
-  return Object.keys(record).sort().join(",") === [...keys].sort().join(",");
-}
-
 function parseDocument(value: unknown): PiUpgradeRolloutDocument | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const record = value as Record<string, unknown>;
+  if (!isRecord(value)) return undefined;
+  const record = value;
   if (
-    !exactKeys(record, ["version", "stage", "activatedAt", "revision"]) || record.version !== 1 ||
+    !hasExactKeys(record, ["version", "stage", "activatedAt", "revision"]) || record.version !== 1 ||
     !PI_UPGRADE_ROLLOUT_STAGES.includes(record.stage as PiUpgradeRolloutStage) ||
     !Number.isSafeInteger(record.activatedAt) || (record.activatedAt as number) < 0 ||
     !Number.isSafeInteger(record.revision) || (record.revision as number) < 1
@@ -123,9 +120,9 @@ export function piUpgradeLegacyMigrationEligible(
 function canonicalJson(value: unknown): string { return JSON.stringify(value); }
 
 function parseEvaluationReceipt(value: unknown): PiUpgradeEvaluationReceipt | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const record = value as Record<string, unknown>;
-  if (!exactKeys(record, ["schema", "version", "generatedAt", "packageSha256", "buildId", "measurements", "report"])) return undefined;
+  if (!isRecord(value)) return undefined;
+  const record = value;
+  if (!hasExactKeys(record, ["schema", "version", "generatedAt", "packageSha256", "buildId", "measurements", "report"])) return undefined;
   if (
     record.schema !== "aiden.pi-upgrade.evaluation" || record.version !== 1 ||
     typeof record.generatedAt !== "string" || Number.isNaN(Date.parse(record.generatedAt)) ||
@@ -147,9 +144,9 @@ function parseEvaluationReceipt(value: unknown): PiUpgradeEvaluationReceipt | un
 }
 
 function parseInstalledReceipt(value: unknown): PiUpgradeInstalledReceipt | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const record = value as Record<string, unknown>;
-  if (!exactKeys(record, [
+  if (!isRecord(value)) return undefined;
+  const record = value;
+  if (!hasExactKeys(record, [
     "schema", "version", "packageSha256", "buildId", "evaluationSha256",
     "packagedMigrationRestartPassed", "rollbackPassed", "signedInstallPassed", "recordedAt",
   ])) return undefined;

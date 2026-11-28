@@ -11,6 +11,7 @@
  */
 
 import { fenceAsData } from "../../renderer/shared/agent-notices.js";
+import { isRecord } from "../shared/guards.js";
 import { claudeToolInput, claudeToolName } from "./hooks/hook-aliases.js";
 import { hookScopesFor } from "./hooks/hook-config.js";
 import { getHookDispatcher } from "./hooks/index.js";
@@ -163,10 +164,6 @@ export function chatSurfaceHooks(
     dispatcher,
     options,
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**

@@ -3,6 +3,7 @@ import { types as utilTypes } from "node:util";
 import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { isSafeSubagentIdentifier } from "../../../renderer/shared/subagent-runs.js";
+import { isRecord } from "../../shared/guards.js";
 import { isMcpToolHidden } from "../../../renderer/shared/mcp-exposure.js";
 import { mcpRuntimeConnectionSnapshot } from "../mcp-credential-cleanup-core.js";
 import { assertUniqueMcpAgentToolNames, mcpScopedAgentToolName } from "../mcp-tool-identity.js";
@@ -133,10 +134,6 @@ export type NormalizedSubagentMcpRemoteTool = InspectedSubagentMcpTool & {
 interface JsonState {
   nodes: number;
   seen: Set<object>;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function canonicalJsonValue(value: unknown, state: JsonState, depth = 0): unknown {

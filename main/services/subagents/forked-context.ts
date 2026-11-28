@@ -7,6 +7,7 @@ import { runtimeSupportsImages } from "../generation-runtime.js";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
 import { sanitizeSubagentText } from "./safe-text.js";
 import { isHookBlockedPrompt } from "../hook-blocked-prompt.js";
+import { isRecord } from "../../shared/guards.js";
 import { redactCredentialTokens } from "../../shared/redaction.js";
 
 export type SubagentContextMode = "fresh" | "fork";
@@ -74,10 +75,6 @@ export interface LiveSubagentContextCaptureInput {
   /** Read exactly once from the live parent Agent at the nested tool boundary. */
   messages: unknown;
   descendantContextWindow: number;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function boundedString(value: unknown, maximum: number, field: string, allowEmpty = false): string {
@@ -184,8 +181,8 @@ function ownArrayValues(value: unknown, field: string, maximum: number): unknown
   return result;
 }
 
-function plainRecord(value: unknown, field: string): object {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+function assertForkPlainRecord(value: unknown, field: string): object {
+  if (!isRecord(value)) {
     throw new Error(`Live fork context contains an invalid ${field}.`);
   }
   let prototype: object | null;
@@ -281,7 +278,7 @@ export function captureLiveSubagentContext(
   const projected: ForkContextMessage[] = [];
   let attachmentBytes = 0;
   for (let messageIndex = 0; messageIndex < source.length; messageIndex += 1) {
-    const message = plainRecord(source[messageIndex], "message");
+    const message = assertForkPlainRecord(source[messageIndex], "message");
     const role = ownData(message, "role", "message role");
     if (role !== "user" && role !== "assistant") continue;
     const rawContent = ownData(message, "content", "message content");
@@ -296,7 +293,7 @@ export function captureLiveSubagentContext(
       const parts = ownArrayValues(rawContent, "message content", MAX_ATTACHMENTS_PER_MESSAGE * 4);
       const text: string[] = [];
       for (let partIndex = 0; partIndex < parts.length; partIndex += 1) {
-        const part = plainRecord(parts[partIndex], "content part");
+        const part = assertForkPlainRecord(parts[partIndex], "content part");
         const projectedText = liveTextPart(part);
         if (projectedText !== undefined) {
           text.push(projectedText);

@@ -12,7 +12,8 @@
 
 import type { GitHubApi, GitHubApiResult } from "../github/github-api.js";
 import { PULL_REQUEST_FRAGMENT, pullRequestFromGraphQl } from "../github/github-pull-request-graphql.js";
-import { boundedString, isRecord, safeHttpUrl } from "../github/github-pull-request-parse.js";
+import { boundedString, safeHttpUrl } from "../github/github-pull-request-parse.js";
+import { isRecord } from "../../shared/guards.js";
 import { tailText } from "../../../renderer/shared/agent-notices.js";
 import { normalizeSubagentModelText } from "../subagents/model-text.js";
 import type { FollowedCheck, FollowedComment, PullRequestObservation } from "./pull-request-follow.js";

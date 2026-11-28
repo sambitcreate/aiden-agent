@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { hasExactKeys, isRecord } from "../shared/guards.js";
 import type { AidenRemoteBotAvatarAsset } from "./aiden-remote-protocol.js";
 
 export const BOT_AVATAR_STORE_VERSION = 1 as const;
@@ -135,16 +136,6 @@ export class BotAvatarReplayError extends Error {
   readonly name = "BotAvatarReplayError";
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
-}
-
 function isSafeIdentifier(value: unknown, max = 160): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= max &&
     value.normalize("NFKC") === value && value !== "." && value !== ".." && SAFE_IDENTIFIER.test(value);
@@ -155,13 +146,13 @@ function isTimestamp(value: unknown): value is number {
 }
 
 function isIncarnation(value: unknown): value is BotAvatarAssetIncarnation {
-  return isRecord(value) && exactKeys(value, ["device", "inode"]) &&
+  return isRecord(value) && hasExactKeys(value, ["device", "inode"]) &&
     typeof value.device === "string" && DECIMAL.test(value.device) &&
     typeof value.inode === "string" && /^[1-9][0-9]*$/u.test(value.inode);
 }
 
 function parseAsset(value: unknown): BotAvatarStoredAsset {
-  if (!isRecord(value) || !exactKeys(value, ["assetId", "byteSize", "digest", "incarnation"]) ||
+  if (!isRecord(value) || !hasExactKeys(value, ["assetId", "byteSize", "digest", "incarnation"]) ||
       typeof value.assetId !== "string" || !ASSET_ID.test(value.assetId) ||
       !Number.isSafeInteger(value.byteSize) || (value.byteSize as number) < 1 ||
       (value.byteSize as number) > BOT_AVATAR_CANONICAL_MAX_BYTES ||
@@ -178,7 +169,7 @@ function parseAsset(value: unknown): BotAvatarStoredAsset {
 }
 
 function parseRecord(value: unknown): BotAvatarRecord {
-  if (!isRecord(value) || !exactKeys(value, ["ownerId", "botId", "assetRevision", "asset", "updatedAt"]) ||
+  if (!isRecord(value) || !hasExactKeys(value, ["ownerId", "botId", "assetRevision", "asset", "updatedAt"]) ||
       !isSafeIdentifier(value.ownerId, 160) || !isSafeIdentifier(value.botId, 160) ||
       typeof value.assetRevision !== "string" || !ASSET_REVISION.test(value.assetRevision) ||
       !isTimestamp(value.updatedAt)) {
@@ -194,7 +185,7 @@ function parseRecord(value: unknown): BotAvatarRecord {
 }
 
 function parseReceipt(value: unknown): BotAvatarMutationReceipt {
-  if (!isRecord(value) || !exactKeys(value, [
+  if (!isRecord(value) || !hasExactKeys(value, [
     "operationId", "ownerId", "botId", "kind", "expectedAssetRevision", "inputDigest",
     "resultAssetRevision", "completedAt",
   ]) || !isSafeIdentifier(value.operationId, 128) || !isSafeIdentifier(value.ownerId, 160) ||
@@ -210,7 +201,7 @@ function parseReceipt(value: unknown): BotAvatarMutationReceipt {
 }
 
 export function parseBotAvatarStoreDocument(value: unknown): BotAvatarStoreDocument {
-  if (!isRecord(value) || !exactKeys(value, ["version", "records", "receipts"]) ||
+  if (!isRecord(value) || !hasExactKeys(value, ["version", "records", "receipts"]) ||
       value.version !== BOT_AVATAR_STORE_VERSION || !Array.isArray(value.records) ||
       value.records.length > BOT_AVATAR_MAX_RECORDS || !Array.isArray(value.receipts) ||
       value.receipts.length > BOT_AVATAR_MAX_RECEIPTS) {

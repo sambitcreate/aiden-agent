@@ -1,3 +1,5 @@
+import { isRecord } from "../shared/guards.js";
+
 export interface WindowBounds {
   x: number;
   y: number;
@@ -27,10 +29,6 @@ const DEFAULT_STATE: MainWindowState = {
   maximized: false,
   fullScreen: false,
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function boundedInteger(value: unknown, limit: number): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && Math.abs(value) <= limit

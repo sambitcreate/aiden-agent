@@ -7,6 +7,7 @@ import { HOOK_EVENTS, type HookEvent, type HookListing, type HookScope } from ".
 import { MAX_HOOK_COMMAND_LENGTH, maxHookTimeoutSeconds, normalizeWorkspaceRoot } from "../services/hooks/hook-config.js";
 import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import type { HookChange, HookList, HookService } from "../services/hooks/hook-service.js";
+import { isRecord } from "../shared/guards.js";
 import {
   HOOK_MAX_MATCHER_LENGTH,
   HOOK_MAX_NAME_LENGTH,
@@ -46,9 +47,9 @@ function event(value: unknown): HookEvent {
   return value as HookEvent;
 }
 
-function plainObject(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
-  return value as Record<string, unknown>;
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) invalid();
+  return value;
 }
 
 export interface HookHandlerDependencies<Event> {
@@ -147,8 +148,8 @@ export function registerHookHandlers<Event>(dependencies: HookHandlerDependencie
   handle("hooks:rejectProposal", async (_event, proposalId) => ready().rejectProposal(id(proposalId)));
 
   handle("hooks:save", async (_event, request) => {
-    const input = plainObject(request);
-    const scopeInput = plainObject(input.scope);
+    const input = requireRecord(request);
+    const scopeInput = requireRecord(input.scope);
     let scope: HookScope;
     if (scopeInput.kind === "global") scope = { kind: "global" };
     else if (scopeInput.kind === "workspace" && typeof scopeInput.workspaceRoot === "string" && path.isAbsolute(scopeInput.workspaceRoot)) {

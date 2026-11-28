@@ -1,3 +1,4 @@
+import { hasExactKeys, isRecord } from "../../main/shared/guards.js";
 import { safeApprovalText } from "./assistant.js";
 
 /**
@@ -66,15 +67,6 @@ const OPTIONAL_DETAIL_KEYS = ["scriptFiles", "scriptCoverage"] as const;
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/u;
 
-function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value);
-  return actual.length === keys.length && actual.every((key) => keys.includes(key));
-}
-
-function plainRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
-}
-
 function isApprovalHook(value: Record<string, unknown>): boolean {
   return (
     safeApprovalText(value.event, 40) &&
@@ -94,19 +86,18 @@ function isApprovalHook(value: Record<string, unknown>): boolean {
 
 /** Exact shape, bounded text with no control or bidi characters; anything else blocks the card. */
 export function isHookProposalApprovalDetails(value: unknown): value is HookProposalApprovalDetails {
-  const details = plainRecord(value);
-  if (!details) return false;
-  const optional = OPTIONAL_DETAIL_KEYS.filter((key) => key in details);
-  if (!exactKeys(details, [...DETAIL_KEYS, ...optional])) return false;
+  if (!isRecord(value)) return false;
+  const details = value;
+  if (!hasExactKeys(details, DETAIL_KEYS, OPTIONAL_DETAIL_KEYS)) return false;
   if (
-    "scriptFiles" in details &&
+    Object.prototype.hasOwnProperty.call(details, "scriptFiles") &&
     (!Array.isArray(details.scriptFiles) ||
       details.scriptFiles.length > HOOK_PROPOSAL_MAX_SCRIPT_FILES ||
       !details.scriptFiles.every((file) => safeApprovalText(file, HOOK_PROPOSAL_SCRIPT_FILE_LIMIT)))
   ) {
     return false;
   }
-  if ("scriptCoverage" in details && details.scriptCoverage !== "partial") return false;
+  if (Object.prototype.hasOwnProperty.call(details, "scriptCoverage") && details.scriptCoverage !== "partial") return false;
   if (details.kind !== HOOK_PROPOSAL_APPROVAL_KIND) return false;
   if (details.action !== "create" && details.action !== "update" && details.action !== "delete") return false;
   if (!safeApprovalText(details.name, HOOK_PROPOSAL_LABEL_LIMIT)) return false;
@@ -121,6 +112,6 @@ export function isHookProposalApprovalDetails(value: unknown): value is HookProp
   }
   if (!isApprovalHook(details)) return false;
   if (details.previous === null) return details.action !== "update";
-  const previous = plainRecord(details.previous);
-  return details.action === "update" && previous !== undefined && exactKeys(previous, HOOK_KEYS) && isApprovalHook(previous);
+  const previous = isRecord(details.previous) ? details.previous : undefined;
+  return details.action === "update" && previous !== undefined && hasExactKeys(previous, HOOK_KEYS) && isApprovalHook(previous);
 }

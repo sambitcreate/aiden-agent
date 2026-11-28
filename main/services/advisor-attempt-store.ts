@@ -1,3 +1,4 @@
+import { hasExactKeys, isPlainObject } from "../shared/guards.js";
 import { DataStore } from "./data-store.js";
 
 export const MAX_ADVISOR_ATTEMPTS = 512;
@@ -58,24 +59,11 @@ const FAILURES = new Set<AdvisorAttemptFailure>([
   "host",
 ]);
 
-function record(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value);
-  return actual.length === keys.length && actual.every((key) => keys.includes(key));
-}
-
 export function parseAdvisorAttempt(value: unknown): AdvisorAttemptV1 | null {
-  const input = record(value);
+  const input = isPlainObject(value) ? value : undefined;
   if (
     !input ||
-    !exactKeys(input, [
+    !hasExactKeys(input, [
       "version",
       "attemptId",
       "providerId",
@@ -109,10 +97,10 @@ export function parseAdvisorAttempt(value: unknown): AdvisorAttemptV1 | null {
 }
 
 export function parseAdvisorAttemptDatabase(value: unknown): AdvisorAttemptDatabaseV1 | null {
-  const input = record(value);
+  const input = isPlainObject(value) ? value : undefined;
   if (
     !input ||
-    !exactKeys(input, ["version", "revision", "attempts"]) ||
+    !hasExactKeys(input, ["version", "revision", "attempts"]) ||
     input.version !== 1 ||
     !Number.isSafeInteger(input.revision) ||
     (input.revision as number) < 0 ||

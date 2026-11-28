@@ -1,3 +1,4 @@
+import { hasExactKeys, isRecord } from "../../main/shared/guards.js";
 import {
   parseSubagentRunSnapshotV2,
   type SubagentRunSnapshotV2,
@@ -30,15 +31,6 @@ export type SubagentManagementResultV2 =
     }
   | { version: 2; action: "steer"; snapshot: SubagentRunSnapshotV2 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function exactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
-  const keys = Object.keys(value);
-  return keys.length === expected.length && keys.every((key) => expected.includes(key));
-}
-
 /** Parse every main response again before it enters renderer state. */
 export function parseSubagentManagementResultV2(
   value: unknown,
@@ -50,27 +42,27 @@ export function parseSubagentManagementResultV2(
   if (!snapshot) return undefined;
   if (
     (value.action === "status" || value.action === "steer") &&
-    exactKeys(value, ["version", "action", "snapshot"])
+    hasExactKeys(value, ["version", "action", "snapshot"])
   ) {
     return { version: 2, action: value.action, snapshot };
   }
   if (
     value.action === "wait" &&
-    exactKeys(value, ["version", "action", "snapshot", "timedOut"]) &&
+    hasExactKeys(value, ["version", "action", "snapshot", "timedOut"]) &&
     typeof value.timedOut === "boolean"
   ) {
     return { version: 2, action: "wait", snapshot, timedOut: value.timedOut };
   }
   if (
     value.action === "stop" &&
-    exactKeys(value, ["version", "action", "snapshot", "changed"]) &&
+    hasExactKeys(value, ["version", "action", "snapshot", "changed"]) &&
     typeof value.changed === "boolean"
   ) {
     return { version: 2, action: "stop", snapshot, changed: value.changed };
   }
   if (
     value.action === "retry" &&
-    exactKeys(value, ["version", "action", "sourceSnapshot", "snapshot"])
+    hasExactKeys(value, ["version", "action", "sourceSnapshot", "snapshot"])
   ) {
     const sourceSnapshot = parseSubagentRunSnapshotV2(value.sourceSnapshot);
     if (

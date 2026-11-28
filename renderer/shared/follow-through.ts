@@ -4,6 +4,7 @@
 // answer, and a check-back the agent promised waits for its minute. Main owns
 // all four; the renderer lists them and can stop or cancel each one.
 
+import { isRecord } from "../../main/shared/guards.js";
 import type { BackgroundJobView } from "./background-jobs.js";
 import { parseCheckBackView, type CheckBackView } from "./check-backs.js";
 
@@ -87,10 +88,6 @@ export function hasActiveFollowThrough(state: ChatFollowThroughV1 | null | undef
     state.pullRequests.some((follow) => follow.state === "following") ||
     state.checkBacks.length > 0
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Shape check for the IPC answer; main builds it, so this guards drift, not attacks. */

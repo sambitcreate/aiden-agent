@@ -4,6 +4,7 @@ import type { AuthEvent, AuthInteraction, AuthPrompt, AuthType } from "@earendil
 import { analyticsProviderId } from "./analytics/analytics-ids.js";
 import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
+import { hasExactKeys, isRecord } from "../shared/guards.js";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
 
 const FLOW_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -218,13 +219,8 @@ export class ProviderAuthRequestError extends Error {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 function assertExactKeys(value: Record<string, unknown>, allowed: readonly string[]): void {
-  const allowedKeys = new Set(allowed);
-  if (Object.keys(value).some((key) => !allowedKeys.has(key))) {
+  if (!hasExactKeys(value, [], allowed)) {
     throw new ProviderAuthRequestError("Provider authentication request has an invalid shape.");
   }
 }

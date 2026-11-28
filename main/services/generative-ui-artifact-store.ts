@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { hasExactKeys, isRecord } from "../shared/guards.js";
 import { DataStore } from "./data-store.js";
 import {
   parseChatHtmlArtifactV1,
@@ -73,20 +74,6 @@ function emptyDatabase(): GenerativeUiArtifactDatabase {
   return { version: STORE_VERSION, revision: 0, records: [] };
 }
 
-function exactKeys(
-  value: Record<string, unknown>,
-  expected: ReadonlySet<string>,
-  optional: ReadonlySet<string> = new Set(),
-): boolean {
-  const keys = Object.keys(value);
-  return (
-    keys.length >= expected.size &&
-    keys.length <= expected.size + optional.size &&
-    expected.size === [...expected].filter((key) => key in value).length &&
-    keys.every((key) => expected.has(key) || optional.has(key))
-  );
-}
-
 function boundedIdentity(value: unknown): value is string {
   if (
     typeof value !== "string" ||
@@ -108,10 +95,10 @@ function copyGenerationId(sourceChatId: string): string {
 }
 
 function parseRecord(value: unknown): StagedHtmlArtifact | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const record = value as Record<string, unknown>;
+  if (!isRecord(value)) return undefined;
+  const record = value;
   if (
-    !exactKeys(record, REQUIRED_RECORD_KEYS, OPTIONAL_RECORD_KEYS) ||
+    !hasExactKeys(record, REQUIRED_RECORD_KEYS, OPTIONAL_RECORD_KEYS) ||
     record.version !== STORE_VERSION ||
     !boundedIdentity(record.chatId) ||
     !boundedIdentity(record.generationId) ||
@@ -144,10 +131,10 @@ function parseRecord(value: unknown): StagedHtmlArtifact | undefined {
 }
 
 function parseDatabase(value: unknown): GenerativeUiArtifactDatabase | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const database = value as Record<string, unknown>;
+  if (!isRecord(value)) return undefined;
+  const database = value;
   if (
-    !exactKeys(database, DATABASE_KEYS) ||
+    !hasExactKeys(database, DATABASE_KEYS) ||
     database.version !== STORE_VERSION ||
     !Number.isSafeInteger(database.revision) ||
     (database.revision as number) < 0 ||

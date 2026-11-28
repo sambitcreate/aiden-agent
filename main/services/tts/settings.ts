@@ -10,10 +10,7 @@ import {
   TTS_SETTINGS_VERSION,
   type TtsSettingsV1,
 } from "../../../renderer/shared/tts.js";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+import { isRecord } from "../../shared/guards.js";
 
 /**
  * Parse a persisted TTS settings document. Returns null when the document was

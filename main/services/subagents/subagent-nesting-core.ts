@@ -1,6 +1,7 @@
 import { types as utilTypes } from "node:util";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { isSafeSubagentIdentifier } from "../../../renderer/shared/subagent-runs.js";
+import { snapshotExactPlainRecord } from "../../shared/plain-record.js";
 import {
   MAX_SUBAGENT_TREE_DEPTH,
   parseSubagentCapabilitySetV2,
@@ -65,42 +66,6 @@ const TOOL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const MINTED_TREE_NODES = new WeakSet<object>();
 const MAX_SUBAGENT_TREE_TURN_BUDGET = 512;
 const MAX_SUBAGENT_TREE_NETWORK_OPERATION_BUDGET = 512;
-
-function exactPlainRecord(
-  value: unknown,
-  keys: readonly string[],
-): Record<string, unknown> | undefined {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    Array.isArray(value) ||
-    utilTypes.isProxy(value)
-  ) {
-    return undefined;
-  }
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return undefined;
-  const descriptors = Object.getOwnPropertyDescriptors(
-    value,
-  ) as unknown as Record<PropertyKey, PropertyDescriptor>;
-  const actual = Reflect.ownKeys(descriptors);
-  if (
-    actual.length !== keys.length ||
-    actual.some(
-      (key) =>
-        typeof key !== "string" ||
-        !keys.includes(key) ||
-        !Object.prototype.hasOwnProperty.call(descriptors, key) ||
-        !("value" in descriptors[key]!) ||
-        descriptors[key]!.enumerable !== true,
-    )
-  ) {
-    return undefined;
-  }
-  return Object.fromEntries(
-    (actual as string[]).map((key) => [key, descriptors[key]!.value]),
-  );
-}
 
 function privateText(value: unknown, field: string): string {
   if (
@@ -208,7 +173,7 @@ function exactDenseArray(
 }
 
 function safeCapabilitySnapshot(value: unknown): Record<string, unknown> {
-  const top = exactPlainRecord(value, [
+  const top = snapshotExactPlainRecord(value, [
     "workspaceRead",
     "workspaceWrite",
     "shell",
@@ -218,7 +183,7 @@ function safeCapabilitySnapshot(value: unknown): Record<string, unknown> {
   ]);
   if (!top) throw new Error("Invalid subagent tree capability ceiling.");
   const mcp = exactDenseArray(top.mcp, 16, "MCP ceiling").map((scopeValue) => {
-    const scope = exactPlainRecord(scopeValue, [
+    const scope = snapshotExactPlainRecord(scopeValue, [
       "serverId",
       "connectionFingerprint",
       "tools",
@@ -226,19 +191,19 @@ function safeCapabilitySnapshot(value: unknown): Record<string, unknown> {
     if (!scope) throw new Error("Invalid subagent tree MCP scope.");
     const tools = exactDenseArray(scope.tools, 32, "MCP tool ceiling").map(
       (toolValue) => {
-        const read = exactPlainRecord(toolValue, [
+        const read = snapshotExactPlainRecord(toolValue, [
           "toolName",
           "schemaHash",
           "effect",
         ]);
         if (read) return read;
-        const mutation = exactPlainRecord(toolValue, [
+        const mutation = snapshotExactPlainRecord(toolValue, [
           "toolName",
           "schemaHash",
           "effect",
           "effectProfile",
         ]);
-        const profile = exactPlainRecord(mutation?.effectProfile, [
+        const profile = snapshotExactPlainRecord(mutation?.effectProfile, [
           "classification",
           "destructive",
           "idempotency",
@@ -271,21 +236,21 @@ function freezeCapabilities(value: unknown): SubagentCapabilitySetV2 {
 }
 
 function parseFixedCeiling(value: unknown): SubagentTreeFixedCeilingV2 {
-  const fixed = exactPlainRecord(value, ["workspace", "runtime", "context"]);
-  const workspace = exactPlainRecord(fixed?.workspace, [
+  const fixed = snapshotExactPlainRecord(value, ["workspace", "runtime", "context"]);
+  const workspace = snapshotExactPlainRecord(fixed?.workspace, [
     "generationId",
     "chatId",
     "workspaceId",
     "workspaceRevision",
     "ownerDocumentId",
   ]);
-  const runtime = exactPlainRecord(fixed?.runtime, [
+  const runtime = snapshotExactPlainRecord(fixed?.runtime, [
     "providerFingerprint",
     "modelFingerprint",
     "execution",
     "thinkingLevel",
   ]);
-  const context = exactPlainRecord(fixed?.context, [
+  const context = snapshotExactPlainRecord(fixed?.context, [
     "mode",
     "revision",
     "maxInputTokens",
@@ -355,7 +320,7 @@ function mintNode(node: SubagentTreeNodeV2): SubagentTreeNodeV2 {
 
 /** Exact depth-0 parent-generation record. It is control state, not a child authority. */
 export function createSubagentTreeRootV2(input: unknown): SubagentTreeNodeV2 {
-  const root = exactPlainRecord(input, [
+  const root = snapshotExactPlainRecord(input, [
     "treeRootId",
     "runId",
     "fixedCeiling",
@@ -382,7 +347,7 @@ export function createSubagentTreeDescendantV2(
 ): SubagentTreeNodeV2 {
   if (!MINTED_TREE_NODES.has(parent))
     throw new Error("Invalid subagent tree parent authority.");
-  const child = exactPlainRecord(input, ["runId", "capabilities", "toolNames"]);
+  const child = snapshotExactPlainRecord(input, ["runId", "capabilities", "toolNames"]);
   if (!child) throw new Error("Invalid subagent tree descendant fields.");
   const depth = parent.identity.depth + 1;
   if (depth > MAX_SUBAGENT_TREE_DEPTH) {
@@ -488,7 +453,7 @@ interface LedgerRun {
 }
 
 function parseBudgetLimits(value: unknown): SubagentTreeBudgetLimitsV2 {
-  const limits = exactPlainRecord(value, [
+  const limits = snapshotExactPlainRecord(value, [
     "maxDepth",
     "maxLaunches",
     "maxActive",
@@ -536,7 +501,7 @@ function parseBudgetLimits(value: unknown): SubagentTreeBudgetLimitsV2 {
 }
 
 function parseUsage(value: unknown): SubagentTreeBudgetUsageV2 {
-  const usage = exactPlainRecord(value, [
+  const usage = snapshotExactPlainRecord(value, [
     "tokens",
     "toolCalls",
     "outputChars",

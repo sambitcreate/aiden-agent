@@ -1,4 +1,5 @@
 import { McpToolCallNotSentError } from "./subagent-effect-v2.js";
+import { hasExactKeys, isRecord } from "../../shared/guards.js";
 import { isDeepStrictEqual, TextDecoder } from "node:util";
 import {
   isSafeSubagentIdentifier,
@@ -104,20 +105,6 @@ export interface SubagentRunStoreV1CheckpointV2 {
   sourceSha256: string;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function exactKeys(value: Record<string, unknown>, required: readonly string[], optional: readonly string[] = []): boolean {
-  const keys = Object.keys(value);
-  return (
-    required.every((key) => key in value) &&
-    keys.length >= required.length &&
-    keys.length <= required.length + optional.length &&
-    keys.every((key) => required.includes(key) || optional.includes(key))
-  );
-}
-
 function positiveInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 1;
 }
@@ -127,7 +114,7 @@ function positiveInteger(value: unknown): value is number {
 function parseMigration(value: unknown): SubagentRunMigrationV2 | undefined {
   if (
     !isRecord(value) ||
-    !exactKeys(value, ["status", "adapterVersion", "source", "sourceGeneration", "sourceSha256", "migratedAt"]) ||
+    !hasExactKeys(value, ["status", "adapterVersion", "source", "sourceGeneration", "sourceSha256", "migratedAt"]) ||
     (value.status !== "prepared" && value.status !== "committed") ||
     value.adapterVersion !== MIGRATION_ADAPTER_VERSION ||
     (value.source !== "missing" && value.source !== "v1") ||
@@ -159,7 +146,7 @@ function boundedPrivateString(value: unknown): value is string {
 function parseAuthority(value: unknown): SubagentAuthorityV2 | undefined {
   if (
     !isRecord(value) ||
-    !exactKeys(
+    !hasExactKeys(
       value,
       [
         "version",
@@ -203,7 +190,7 @@ function parseAuthority(value: unknown): SubagentAuthorityV2 | undefined {
 
 function parseImportedManifest(value: Record<string, unknown>): ImportedSubagentPrivateRunManifestV2 | undefined {
   if (
-    !exactKeys(value, [
+    !hasExactKeys(value, [
       "version",
       "provenance",
       "runId",
@@ -240,7 +227,7 @@ function parseImportedManifest(value: Record<string, unknown>): ImportedSubagent
 
 function parseNativeManifest(value: Record<string, unknown>): NativeSubagentPrivateRunManifestV2 | undefined {
   if (
-    !exactKeys(value, [
+    !hasExactKeys(value, [
       "version",
       "provenance",
       "runId",
@@ -313,7 +300,7 @@ function manifestMatchesSnapshot(manifest: MutableSubagentPrivateRunManifestV2, 
 export function parseMutableSubagentRunDatabaseV2(value: unknown): MutableSubagentRunDatabaseV2 | undefined {
   if (
     !isRecord(value) ||
-    !exactKeys(value, [
+    !hasExactKeys(value, [
       "version",
       "storeRevision",
       "migration",

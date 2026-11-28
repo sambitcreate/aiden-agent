@@ -5,6 +5,7 @@ import {
   canonicalGitHubPullRequestUrl,
   parseGitHubPullRequestUrl,
 } from "../../../renderer/shared/chat-pull-requests.js";
+import { isRecord } from "../../shared/guards.js";
 import type {
   GitHubPullRequestCheck,
   GitHubPullRequestCheckStatus,
@@ -45,10 +46,6 @@ export interface RawPullRequest {
   mergeable?: unknown;
   updatedAt?: unknown;
   statusCheckRollup?: unknown;
-}
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function boundedString(

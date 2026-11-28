@@ -8,6 +8,7 @@
 // it adds parsing, wire validation and error mapping only.
 
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { hasExactKeys, isRecord } from "../shared/guards.js";
 import {
   APPROVAL_RULE_DECISIONS,
   parseApprovalRuleAddInput,
@@ -55,11 +56,8 @@ const SCOPES = ["mac", "workspace", "bot", "chat"] as const;
 const UNREADABLE = "Your approval rules couldn’t be read. Fix them on your Mac first.";
 const REFUSED = "That rule couldn’t be changed. Refresh and try again.";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function exactKeys(value: Record<string, unknown>, keys: readonly string[], label: string): void {
-  for (const key of Object.keys(value)) if (!keys.includes(key)) throw new Error(`${label} has an unknown field.`);
+function assertAllowedKeys(value: Record<string, unknown>, keys: readonly string[], label: string): void {
+  if (!hasExactKeys(value, [], keys)) throw new Error(`${label} has an unknown field.`);
 }
 function boundedText(value: unknown, label: string, max: number): string {
   if (typeof value !== "string" || value.length === 0 || value.length > max) throw new Error(`${label} is invalid.`);
@@ -68,10 +66,10 @@ function boundedText(value: unknown, label: string, max: number): string {
 
 function parseRow(value: unknown): ApprovalRuleRow {
   if (!isRecord(value)) throw new Error("Rule row must be an object.");
-  exactKeys(value, ["ref", "group", "title", "kind", "scope", "legacy", "decisions", "handOff", "createdAt"], "Rule row");
+  assertAllowedKeys(value, ["ref", "group", "title", "kind", "scope", "legacy", "decisions", "handOff", "createdAt"], "Rule row");
   if (!(GROUPS as readonly unknown[]).includes(value.group)) throw new Error("Rule row group is invalid.");
   if (!isRecord(value.scope) || !(SCOPES as readonly unknown[]).includes(value.scope.kind)) throw new Error("Rule row scope is invalid.");
-  exactKeys(value.scope, ["kind", "label"], "Rule row scope");
+  assertAllowedKeys(value.scope, ["kind", "label"], "Rule row scope");
   if (!Array.isArray(value.decisions) || value.decisions.length > APPROVAL_RULE_DECISIONS.length || value.decisions.some((decision) => !parseApprovalRuleDecision(decision))) {
     throw new Error("Rule row decisions are invalid.");
   }
@@ -101,7 +99,7 @@ function parseRow(value: unknown): ApprovalRuleRow {
 /** `GET /approvals/rules` and every rules write: the page's rows, newest first. */
 export function parseAidenRemoteApprovalRulesView(value: unknown): ApprovalRulesView {
   if (!isRecord(value)) throw new Error("Rules view must be an object.");
-  exactKeys(value, ["rows", "unreadable"], "Rules view");
+  assertAllowedKeys(value, ["rows", "unreadable"], "Rules view");
   if (!Array.isArray(value.rows) || value.rows.length > ROWS_MAX) throw new Error("Rules view rows are invalid.");
   if (value.unreadable !== undefined && value.unreadable !== true) throw new Error("Rules view unreadable is invalid.");
   return { rows: value.rows.map(parseRow), ...(value.unreadable === true ? { unreadable: true as const } : {}) };
@@ -110,12 +108,12 @@ export function parseAidenRemoteApprovalRulesView(value: unknown): ApprovalRules
 /** `GET /approvals/rules/picker`: Add rule's options. */
 export function parseAidenRemoteApprovalRulePicker(value: unknown): { options: ApprovalRulePickerOption[] } {
   if (!isRecord(value)) throw new Error("Rule picker must be an object.");
-  exactKeys(value, ["options"], "Rule picker");
+  assertAllowedKeys(value, ["options"], "Rule picker");
   if (!Array.isArray(value.options) || value.options.length > PICKER_MAX) throw new Error("Rule picker options are invalid.");
   return {
     options: value.options.map((option) => {
       if (!isRecord(option)) throw new Error("Rule picker option must be an object.");
-      exactKeys(option, ["target", "label", "group", "description"], "Rule picker option");
+      assertAllowedKeys(option, ["target", "label", "group", "description"], "Rule picker option");
       const target = parseApprovalRuleTarget(option.target);
       if (!target || target.kind === "text") throw new Error("Rule picker target is invalid.");
       return {

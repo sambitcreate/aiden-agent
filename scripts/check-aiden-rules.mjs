@@ -359,6 +359,63 @@ function literalMotion(file, text) {
   return hits;
 }
 
+// no-local-structural-guard — import structural record/key guards from main/shared/guards.ts
+// (or main/shared/plain-record.ts for Node-only proxy checks) instead of defining local copies.
+const STRUCTURAL_GUARD_OWNERS = new Set(["main/shared/guards.ts", "main/shared/plain-record.ts"]);
+const STRUCTURAL_GUARD_NAMES = new Set([
+  "isRecord",
+  "ownRecord",
+  "plainRecord",
+  "isPlainRecord",
+  "isPlainObject",
+  "plainObject",
+  "exactKeys",
+  "hasExactKeys",
+  "hasOnlyKeys",
+  "hasExactObjectKeys",
+  "isUnproxiedPlainObject",
+  "snapshotPlainRecord",
+  "snapshotPlainDataRecord",
+  "snapshotExactPlainRecord",
+]);
+const STRUCTURAL_GUARD_PREFILTER =
+  /\b(?:isRecord|ownRecord|plainRecord|isPlainRecord|isPlainObject|plainObject|exactKeys|hasExactKeys|hasOnlyKeys|hasExactObjectKeys|isUnproxiedPlainObject|snapshotPlainRecord|snapshotPlainDataRecord|snapshotExactPlainRecord)\b/u;
+
+function noLocalStructuralGuard(file, text) {
+  if (
+    !/^(?:main|renderer)\/.*\.tsx?$/u.test(file) ||
+    file.endsWith(".d.ts") ||
+    isTest(file) ||
+    STRUCTURAL_GUARD_OWNERS.has(file) ||
+    file.startsWith("main/services/web-search-") ||
+    !STRUCTURAL_GUARD_PREFILTER.test(text)
+  ) {
+    return [];
+  }
+  const sourceFile = parse(file, text);
+  const hits = [];
+  walk(sourceFile, (node) => {
+    if (ts.isFunctionDeclaration(node) && node.name && STRUCTURAL_GUARD_NAMES.has(node.name.text)) {
+      hits.push({
+        line: lineOf(sourceFile, node),
+        message: `declares local structural guard "${node.name.text}"; import from main/shared/guards.ts or main/shared/plain-record.ts`,
+      });
+    } else if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      STRUCTURAL_GUARD_NAMES.has(node.name.text) &&
+      node.initializer &&
+      (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))
+    ) {
+      hits.push({
+        line: lineOf(sourceFile, node),
+        message: `declares local structural guard "${node.name.text}"; import from main/shared/guards.ts or main/shared/plain-record.ts`,
+      });
+    }
+  });
+  return hits;
+}
+
 export const RULES = {
   "no-brain-icon": noBrainIcon,
   "text-input-focus-ring": textInputFocusRing,
@@ -366,6 +423,7 @@ export const RULES = {
   "network-allowlist": networkAllowlist,
   "no-source-grep-test": noSourceGrepTest,
   "literal-motion": literalMotion,
+  "no-local-structural-guard": noLocalStructuralGuard,
 };
 
 // Ends as a line comment, a CSS comment, or a JSX `{/* ... */}` comment.

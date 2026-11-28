@@ -210,3 +210,25 @@ test("allowlist entries need a known rule and a reason, and a file-level entry c
   assert.ok(problems.some((problem) => /unknown rule "made-up"/u.test(problem.message)));
   assert.deepEqual(check(motion(4), [{ rule: "literal-motion", file: "renderer/m.css", reason: "legacy" }]), []);
 });
+
+test("local structural guards in main and renderer are reported outside shared guard owners, web-search adapters, and tests", () => {
+  const problems = check({
+    "main/services/parser.ts": [
+      "function isRecord(value: unknown): value is Record<string, unknown> { return Boolean(value); }",
+      "const hasExactKeys = (record: Record<string, unknown>) => Boolean(record);",
+    ].join("\n"),
+    "renderer/shared/feature.ts": [
+      "const plainObject = function (value: unknown) { return Boolean(value); };",
+      "const exactKeys = 42;",
+    ].join("\n"),
+    "main/shared/guards.ts": "export function isRecord(value: unknown): value is Record<string, unknown> { return Boolean(value); }",
+    "main/shared/plain-record.ts": "export function snapshotPlainRecord(value: unknown) { return value; }",
+    "main/services/web-search-custom.ts": "function isRecord(value: unknown) { return Boolean(value); }",
+    "main/services/parser.test.ts": "function isRecord(value: unknown) { return Boolean(value); }",
+  });
+  assert.deepEqual(summary(problems), [
+    "main/services/parser.ts:1 no-local-structural-guard",
+    "main/services/parser.ts:2 no-local-structural-guard",
+    "renderer/shared/feature.ts:1 no-local-structural-guard",
+  ]);
+});

@@ -1,3 +1,4 @@
+import { isRecord } from "../../main/shared/guards.js";
 import { isLinuxTitleBarPreference, type LinuxTitleBarPreference } from "./window-chrome.js";
 
 export type AppearanceMode = "system" | "light" | "dark";
@@ -463,10 +464,6 @@ export function createDefaultAppearanceConfig(): AppearanceConfig {
     light: cloneVariant(DEFAULT_APPEARANCE.light),
     dark: cloneVariant(DEFAULT_APPEARANCE.dark),
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isThemePresetId(value: unknown): value is ThemePresetId {

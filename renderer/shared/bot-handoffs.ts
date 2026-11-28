@@ -8,6 +8,7 @@
 // (`source: "rule"`); a sign-in (`kind: "sign_in"`) is the same card asking
 // the person to sign in to one site in the Bot's own browser or computer.
 
+import { isRecord } from "../../main/shared/guards.js";
 import { isBoundedBotText } from "./bot-capabilities.js";
 import { BOT_LOCKED_RULES } from "./bot-rules.js";
 
@@ -101,10 +102,6 @@ export interface BotHandoffResultDetails {
   toolCallId?: string;
   /** Rule entries: the rule that handed it off. */
   rule?: BotHandoffRule;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function boundedText(value: unknown, maximum: number): value is string {

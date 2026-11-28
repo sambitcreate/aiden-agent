@@ -5,20 +5,12 @@ import {
 } from "../../renderer/shared/assistant-live.js";
 import { GEMINI_LIVE_MAX_JPEG_BYTES } from "../services/gemini-live/protocol.js";
 import { isLiveDisplaySourceId } from "../services/gemini-live/display-source-picker.js";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function exactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
-  const actual = Object.keys(value).sort();
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
-}
+import { hasExactKeys, isRecord } from "../shared/guards.js";
 
 export function parseAssistantLiveStartIntent(value: unknown): AssistantLiveStartIntent {
   if (
     !isRecord(value) ||
-    !exactKeys(value, "screen" in value ? ["computerUseAuthorization", "microphone", "screen"] : ["computerUseAuthorization", "microphone"]) ||
+    !hasExactKeys(value, "screen" in value ? ["computerUseAuthorization", "microphone", "screen"] : ["computerUseAuthorization", "microphone"]) ||
     ("screen" in value && typeof value.screen !== "boolean") ||
     typeof value.microphone !== "boolean" ||
     !(
@@ -38,7 +30,7 @@ export function parseAssistantLiveStartIntent(value: unknown): AssistantLiveStar
 }
 
 export function parseAssistantLiveStopIntent(value: unknown): void {
-  if (!isRecord(value) || !exactKeys(value, [])) {
+  if (!isRecord(value) || !hasExactKeys(value, [])) {
     throw new Error("Invalid Assistant Live stop request.");
   }
 }
@@ -51,7 +43,7 @@ export interface AssistantLiveAudioIntent {
 export function parseAssistantLiveAudioIntent(value: unknown): AssistantLiveAudioIntent {
   if (
     !isRecord(value) ||
-    !exactKeys(value, ["pcm", "sessionId"]) ||
+    !hasExactKeys(value, ["pcm", "sessionId"]) ||
     typeof value.sessionId !== "string" ||
     value.sessionId.length < 1 ||
     value.sessionId.length > 128 ||
@@ -71,7 +63,7 @@ export interface AssistantLiveFrameIntent {
 export function parseAssistantLiveFrameIntent(value: unknown): AssistantLiveFrameIntent {
   if (
     !isRecord(value) ||
-    !exactKeys(value, ["frame", "sessionId"]) ||
+    !hasExactKeys(value, ["frame", "sessionId"]) ||
     typeof value.sessionId !== "string" ||
     value.sessionId.length < 1 ||
     value.sessionId.length > 128 ||
@@ -88,7 +80,7 @@ export function parseAssistantLiveEmptyIntent(
   value: unknown,
   name: string,
 ): void {
-  if (!isRecord(value) || !exactKeys(value, [])) {
+  if (!isRecord(value) || !hasExactKeys(value, [])) {
     throw new Error(`Invalid Assistant Live ${name} request.`);
   }
 }
@@ -98,8 +90,8 @@ export function parseAssistantLiveEmptyIntent(
  * the screen or window the person chose in Aiden's own Linux picker.
  */
 export function parseAssistantLiveDisplayBindIntent(value: unknown): { sourceId: string | null } {
-  if (isRecord(value) && exactKeys(value, [])) return { sourceId: null };
-  if (isRecord(value) && exactKeys(value, ["sourceId"]) && isLiveDisplaySourceId(value.sourceId)) {
+  if (isRecord(value) && hasExactKeys(value, [])) return { sourceId: null };
+  if (isRecord(value) && hasExactKeys(value, ["sourceId"]) && isLiveDisplaySourceId(value.sourceId)) {
     return { sourceId: value.sourceId };
   }
   throw new Error("Invalid Assistant Live display-bind request.");
@@ -110,7 +102,7 @@ export function parseAssistantLiveDisplayReleaseIntent(
 ): { bindingId: string } {
   if (
     !isRecord(value) ||
-    !exactKeys(value, ["bindingId"]) ||
+    !hasExactKeys(value, ["bindingId"]) ||
     typeof value.bindingId !== "string" ||
     value.bindingId.length < 1 ||
     value.bindingId.length > 128
@@ -133,7 +125,7 @@ export interface AssistantLiveToolResultIntent {
 export function parseAssistantLiveToolResultIntent(value: unknown): AssistantLiveToolResultIntent {
   if (
     !isRecord(value) ||
-    !exactKeys(value, ["requestId", "response", "sessionId"]) ||
+    !hasExactKeys(value, ["requestId", "response", "sessionId"]) ||
     !validSessionId(value.sessionId) ||
     typeof value.requestId !== "string" ||
     !/^r[0-9]{1,9}$/u.test(value.requestId) ||
@@ -168,7 +160,7 @@ export function parseAssistantLiveNoteIntent(value: unknown): AssistantLiveNoteI
   const awaitDelivery = isRecord(value) && "awaitDelivery" in value;
   if (
     !isRecord(value) ||
-    !exactKeys(value, awaitDelivery ? ["awaitDelivery", "sessionId", "text"] : ["sessionId", "text"]) ||
+    !hasExactKeys(value, awaitDelivery ? ["awaitDelivery", "sessionId", "text"] : ["sessionId", "text"]) ||
     (awaitDelivery && value.awaitDelivery !== true) ||
     !validSessionId(value.sessionId) ||
     typeof value.text !== "string" ||

@@ -1,4 +1,5 @@
 import { parseCommandReading } from "../../renderer/shared/command-reading.js";
+import { isRecord } from "../shared/guards.js";
 import type { ServerResponse } from "node:http";
 import { approvalCardAllows, buildApprovalCard, type ApprovalCard } from "../../renderer/shared/approval-card-model.js";
 import {
@@ -172,12 +173,6 @@ function isTerminal(state: AidenRemoteRunState): boolean {
   return state === "done" || state === "failed" || state === "cancelled";
 }
 
-function ownRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 /**
  * Strip host-only approval facts for observers without `runs:control`. Those
  * observers keep the mobile summary projection; controllers get the details
@@ -347,7 +342,7 @@ export function hostRunEndedEvent(summary: HostRunSummary): AidenRemoteRunEvent 
  */
 function phoneMayAllow(payload: Record<string, unknown>): boolean {
   if (payload.detailsOmitted === true) return false;
-  const details = ownRecord(payload.details);
+  const details = isRecord(payload.details) ? payload.details : undefined;
   return (
     details === undefined ||
     details.kind === "scheduled-task" ||
@@ -387,7 +382,7 @@ function requireInformedAllow(payload: Record<string, unknown>, scope: ToolAppro
 }
 
 function parseRunApproval(value: unknown): { decision: "allow" | "deny"; scope?: ToolApprovalScope } {
-  const record = ownRecord(value);
+  const record = isRecord(value) ? value : undefined;
   const scope = record && "scope" in record ? parseRemoteToolApprovalScope(record.scope) : undefined;
   if (
     !record ||
@@ -401,7 +396,7 @@ function parseRunApproval(value: unknown): { decision: "allow" | "deny"; scope?:
 }
 
 function parseRunInput(value: unknown): { mode: AidenRemoteRunInputMode; text: string } {
-  const record = ownRecord(value);
+  const record = isRecord(value) ? value : undefined;
   if (
     !record ||
     Object.keys(record).some((key) => key !== "mode" && key !== "text") ||
@@ -653,7 +648,7 @@ export class AidenRemoteHostRunService {
     key: string,
     access: AidenRemoteRunChatAccess,
   ): Promise<AidenRemoteRunQuestionResult> {
-    const record = ownRecord(body);
+    const record = isRecord(body) ? body : undefined;
     if (
       !record ||
       Object.keys(record).some((name) => name !== "cancelled" && name !== "answers") ||

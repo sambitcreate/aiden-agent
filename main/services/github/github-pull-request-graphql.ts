@@ -5,7 +5,8 @@
 import { normalizeGitHubRepositoryIdentity } from "../../../renderer/shared/chat-pull-requests.js";
 import type { GitHubPullRequestSummary, GitHubRepositoryRef } from "../types.js";
 import type { GitHubApi, GitHubApiResult, GitHubGraphQlFieldError } from "./github-api.js";
-import { boundedString, isRecord, parseRawPullRequest } from "./github-pull-request-parse.js";
+import { boundedString, parseRawPullRequest } from "./github-pull-request-parse.js";
+import { isRecord } from "../../shared/guards.js";
 
 /** Head-branch lookups read this many PRs; a full page means the answer may be truncated. */
 export const BRANCH_LOOKUP_LIMIT = 30;

@@ -11,6 +11,7 @@ import {
 import type { SubagentModelSelectionSource } from "../../../renderer/shared/subagent-runs.js";
 import { isSubagentRole, type SubagentRole } from "./capability-profile.js";
 import { canDispatchSubagentModel } from "./eligibility.js";
+import { isPlainObject } from "../../shared/guards.js";
 
 /** The tool schema lists at most this many models, parent first. */
 export const MAX_SUBAGENT_MODEL_CHOICES = 6;
@@ -114,18 +115,10 @@ function effortRank(level: GenerationThinkingLevel): number {
   return GENERATION_THINKING_LEVELS.indexOf(level);
 }
 
-function plainRecord(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 /** Lenient: an invalid field is dropped so a bad edit never blocks delegation. */
 export function parseSubagentModelSettings(value: unknown): SubagentModelSettings | undefined {
-  const input = plainRecord(value);
-  if (!input) return undefined;
+  if (!isPlainObject(value)) return undefined;
+  const input = value;
   const settings: SubagentModelSettings = {};
   if (isSubagentModelKey(input.defaultModel)) settings.defaultModel = input.defaultModel;
   if (isGenerationThinkingLevel(input.defaultEffort)) settings.defaultEffort = input.defaultEffort;
@@ -136,12 +129,11 @@ export function parseSubagentModelSettings(value: unknown): SubagentModelSetting
   if (Array.isArray(input.allowedModels)) {
     settings.allowedModels = [...new Set(input.allowedModels.filter(isSubagentModelKey))];
   }
-  const roles = plainRecord(input.roles);
-  if (roles) {
+  if (isPlainObject(input.roles)) {
     const parsed: Partial<Record<SubagentRole, SubagentModelRoleSetting>> = {};
-    for (const [role, raw] of Object.entries(roles)) {
-      const entry = plainRecord(raw);
-      if (!isSubagentRole(role) || !entry) continue;
+    for (const [role, raw] of Object.entries(input.roles)) {
+      if (!isSubagentRole(role) || !isPlainObject(raw)) continue;
+      const entry = raw;
       const setting: SubagentModelRoleSetting = {};
       if (isSubagentModelKey(entry.model)) setting.model = entry.model;
       if (isGenerationThinkingLevel(entry.effort)) setting.effort = entry.effort;
