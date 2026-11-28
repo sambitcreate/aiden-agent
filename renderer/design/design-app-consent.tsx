@@ -495,7 +495,7 @@ function toastProblems(snapshot: DesignAppsSnapshot | undefined) {
     if (app?.startedBy !== "person" || typeof app.revision !== "number") continue;
     const message =
       app.problem && !QUIET_PROBLEMS.has(app.problem.problem)
-        ? designAppProblemMessage(app.problem)
+        ? designAppProblemMessage(app.problem, { mock: app.mock === true })
         : app.phase === "crashed"
           ? CRASHED
           : null;

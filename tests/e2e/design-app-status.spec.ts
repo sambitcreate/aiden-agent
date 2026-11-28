@@ -317,13 +317,14 @@ test.describe("with a 15 s presence grace", () => {
     }
   });
 
-  test("a workspace with no web app shows a Connect chip whose menu offers only Connect running server…", async ({ aiden }, testInfo) => {
+  test("a workspace with no web app shows a Connect chip whose menu offers Add design app… and Connect running server…", async ({ aiden }, testInfo) => {
     const { page } = aiden;
     await openDesignChat(aiden);
     await expect(chip(page)).toHaveText("Connect", { timeout: 20_000 });
     await shootChip(page, testInfo, "design-app-chip-connect-only");
     const menu = await openMenu(page);
-    await expect(menu.getByRole("menuitem")).toHaveText(["Connect running server…"]);
+    // 3d: an empty workspace may get a design app.
+    await expect(menu.getByRole("menuitem")).toHaveText(["Add design app…", "Connect running server…"]);
   });
 
   test("a server that hasn't listened yet shows Starting…, and Stop from the menu stops it", async ({ aiden }, testInfo) => {

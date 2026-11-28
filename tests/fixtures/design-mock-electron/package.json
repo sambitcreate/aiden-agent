@@ -1,0 +1,15 @@
+{
+  "name": "desk-notes",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "electron": "39.2.0"
+  }
+}

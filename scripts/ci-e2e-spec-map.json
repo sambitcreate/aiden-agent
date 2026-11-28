@@ -334,6 +334,28 @@
       "tests/fixtures/design-live-routes/",
       "tests/e2e/design-live-helpers.ts"
     ],
+    "design-mock-app.spec.ts": [
+      "resources/design-app-template/",
+      "tests/fixtures/design-mock-",
+      "main/services/design-canvas/app-server/mock-app",
+      "main/services/design-canvas/app-server/app-detect",
+      "main/services/design-canvas/app-server/app-tool",
+      "main/services/design-canvas/app-server/app-server-main",
+      "main/services/design-canvas/skill",
+      "main/services/design-canvas/canvas-tools",
+      "main/services/design-canvas/written-pages",
+      "renderer/design/design-app-chip",
+      "renderer/design/design-app-consent",
+      "renderer/shared/design-app",
+      "tests/e2e/design-live-helpers.ts",
+      "main/services/design-canvas/app-server/app-routes",
+      "main/services/design-canvas/app-server/app-page-files",
+      "main/services/design-canvas/entry",
+      "main/services/design-canvas/mock-home",
+      "main/services/design-canvas/design-md/draft",
+      "main/handlers/design-app",
+      "main/handlers/design-canvas"
+    ],
     "design-mode.spec.ts": [
       "renderer/components/design-mode-banner",
       "renderer/components/design",

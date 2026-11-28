@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createExecutableCache, resolveExecutable, type ExecutableResolutionDeps } from "../../node-toolchain.js";
-import { clearAppToolchainCache, defaultAppToolchainDeps, resolveAppToolchain, toolchainProblemMessage } from "./app-toolchain.js";
+import { clearAppToolchainCache, defaultAppToolchainDeps, resolveAppToolchain, resolveDesignToolchain, toolchainProblemMessage } from "./app-toolchain.js";
 import type { PackageManagerInfo } from "./app-server-core.js";
 
 function fakeDeps(executables: string[], options: { PATH?: string; shellAnswer?: () => string | null } = {}): ExecutableResolutionDeps & { calls: number } {
@@ -178,4 +178,16 @@ test("the design resolvers keep a login-shell answer until clearAppToolchainCach
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("3d: AIDEN_E2E_DESIGN_NODE_MISSING hides Node in an unpackaged build only, without looking anything up", async () => {
+  const env = { AIDEN_E2E_DESIGN_NODE_MISSING: "1" };
+  const node = fakeDeps(["/usr/bin/node", "/usr/bin/npm"]);
+  const deps = { node, manager: fakeDeps(["/usr/bin/npm"]) };
+  assert.deepEqual(await resolveDesignToolchain(manager("npm"), { isPackaged: false, env }, deps), { ok: false, problem: "node-missing" });
+  assert.equal(node.calls, 0);
+  const packaged = await resolveDesignToolchain(manager("npm"), { isPackaged: true, env }, deps);
+  assert.equal(packaged.ok, true, "a packaged build ignores the knob");
+  const unset = await resolveDesignToolchain(manager("npm"), { isPackaged: false, env: { AIDEN_E2E_DESIGN_NODE_MISSING: "0" } }, deps);
+  assert.equal(unset.ok, true);
 });

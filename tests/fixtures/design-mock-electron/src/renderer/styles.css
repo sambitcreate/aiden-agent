@@ -1,0 +1,13 @@
+:root {
+  --brand: rgb(14, 116, 144);
+  font-family: "Söhne", system-ui, sans-serif;
+}
+
+.brand-button {
+  background: var(--brand);
+  color: white;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font: inherit;
+}

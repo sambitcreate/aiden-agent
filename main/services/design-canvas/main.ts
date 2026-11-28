@@ -25,7 +25,7 @@ import { providerKeyNames } from "./app-server/app-launch-core.js";
 import { chooseAppPort, defaultOsPort } from "./app-server/app-ports.js";
 import { createDesignAppRecords } from "./app-server/app-records.js";
 import { DESIGN_APP_PRESENCE_GRACE_MS, DesignAppServers, type DesignAppJobs } from "./app-server/app-server-main.js";
-import { clearAppToolchainCache, defaultAppToolchainDeps, resolveAppToolchain } from "./app-server/app-toolchain.js";
+import { clearAppToolchainCache, resolveDesignToolchain } from "./app-server/app-toolchain.js";
 import { readCanvasConfig, saveCanvasConfigApp } from "./canvas-config.js";
 import {
   designAppTemplateDir,
@@ -318,7 +318,7 @@ export const designAppServers = new DesignAppServers({
   detect: (workspaceRoot) => detectWebApp(workspaceRoot, { stopAt: os.homedir(), homeDir: os.homedir() }),
   readConfig: readCanvasConfig,
   saveConfigApp: saveCanvasConfigApp,
-  toolchain: (detected) => resolveAppToolchain(detected, defaultAppToolchainDeps()),
+  toolchain: (detected) => resolveDesignToolchain(detected, { isPackaged: app.isPackaged, env: process.env }),
   fingerprint: readLaunchSurface,
   dirsUnchanged: launchDirsUnchanged,
   records: createDesignAppRecords(() => path.join(app.getPath("userData"), "design-apps.json")),

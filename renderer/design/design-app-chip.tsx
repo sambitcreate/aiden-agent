@@ -204,7 +204,8 @@ function triggerLabel(chip: ChipModel): string {
 /** One app's line in the menu and the logs drawer's header: its state, or its problem's fixed message. */
 export function designAppStatusLine(app: DesignAppStatus, problem?: DesignAppProblem): string {
   const shown = problem ?? app.problem;
-  if (shown) return designAppProblemMessage(shown);
+  // 3d (S112): a design app's failed install adds its fixed hint.
+  if (shown) return designAppProblemMessage(shown, { mock: app.mock === true });
   const address = app.origin?.replace(/^http:\/\//u, "");
   switch (app.phase) {
     case "running":

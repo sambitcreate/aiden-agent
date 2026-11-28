@@ -331,6 +331,19 @@ test("a problem shows its fixed message in the menu, never the server's output",
   assert.equal(document.body.textContent?.includes("SECRET-LOOKING-TAIL"), false);
 });
 
+test("3d: a design app's install that failed on the network names the network hint; another app's doesn't", async () => {
+  const failed = { problem: "install-failed" as const, exitCode: 1, tail: "npm ERR! code ECONNREFUSED" };
+  mount(snapshot([status({ appRoot: "design-app", mock: true, problem: failed })]));
+  const menu = await openMenu();
+  assert.ok(within(menu).getByText(/^Installing the app's dependencies failed \(exit code 1\)\. The design app's install needs the npm registry\./u));
+  assert.ok(menuItems(menu).includes("Retry"));
+  assert.equal(document.body.textContent?.includes("ECONNREFUSED"), false);
+  await closeMenu(menu);
+  broadcast(snapshot([status({ revision: 30, problem: failed })]));
+  const plain = await openMenu();
+  assert.ok(within(plain).getByText("Installing the app's dependencies failed (exit code 1)."));
+});
+
 // ── The instant rule (B-M1) ──
 
 test("Start shows Starting… before the invoke answers, and the answer replaces it", async () => {

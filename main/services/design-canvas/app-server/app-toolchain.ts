@@ -52,6 +52,20 @@ export async function resolveAppToolchain(app: Pick<DetectedApp, "packageManager
   return { ok: true, node, manager: { name, path: managerPath } };
 }
 
+/**
+ * Design mode's toolchain. E2E only: `AIDEN_E2E_DESIGN_NODE_MISSING=1` in an
+ * unpackaged build answers node-missing, because a test can't hide Node from
+ * the resolver's fallback folders. A packaged build ignores it.
+ */
+export async function resolveDesignToolchain(
+  app: Pick<DetectedApp, "packageManager">,
+  runtime: { isPackaged: boolean; env: NodeJS.ProcessEnv },
+  deps: AppToolchainDeps = defaultAppToolchainDeps(),
+): Promise<AppToolchain> {
+  if (!runtime.isPackaged && runtime.env.AIDEN_E2E_DESIGN_NODE_MISSING === "1") return { ok: false, problem: "node-missing" };
+  return resolveAppToolchain(app, deps);
+}
+
 const designExecutableCache = createExecutableCache();
 
 /** Forgets every remembered login-shell answer, for 2c's Retry after the person installs or moves a tool. */
