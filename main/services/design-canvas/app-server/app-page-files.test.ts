@@ -4,12 +4,12 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { ownerOf } from "./app-page-files-core.js";
-import { confinedTarget, readRegularFileBytes, routeFiles, writeConfinedFile } from "./app-page-files.js";
+import { confinedTarget, createPageFile, readRegularFileBytes, routeFiles, writeConfinedFile } from "./app-page-files.js";
 import { readRouteFile, routeFs, type RouteFs } from "./app-routes.js";
 
 async function workspace(t: TestContext, files: Record<string, string | Buffer>): Promise<string> {
@@ -263,15 +263,90 @@ test("writeConfinedFile writes wx, never over a file, and removes a folder it ma
   assert.equal(await exists(path.join(root, "app/pricing-v4")), false);
 });
 
+/** Whether `dir`'s volume finds a name under another case (APFS, NTFS), probed rather than assumed. */
+async function caseInsensitive(dir: string): Promise<boolean> {
+  await mkdir(path.join(dir, "Case-Probe"));
+  try {
+    return await exists(path.join(dir, "case-probe"));
+  } finally {
+    await rm(path.join(dir, "Case-Probe"), { recursive: true });
+  }
+}
+
 test("a new page's folder already taken under another case, or by a file, is a taken slot", async (t) => {
   const root = await workspace(t, { "app/Pricing-v2/page.tsx": "theirs", "app/pricing-v3": "a file, not a folder" });
-  // A case-insensitive volume (APFS) finds `pricing-v2` and names it by its real case, as native realpath does.
-  const caseOnly = { realpath: async (target: string) => (await realpath(target)).replace(/pricing-v2$/u, "Pricing-v2") };
-  const clashing = await writeConfinedFile(root, "app/pricing-v2/page.tsx", Buffer.from("copy"), 0o644, { create: true, fs: { ...caseOnly, lstat: async (target) => lstat(target.replace(/pricing-v2$/u, "Pricing-v2")) } });
-  assert.deepEqual(clashing, { ok: false, reason: "exists" });
-  assert.deepEqual(await writeConfinedFile(root, "app/pricing-v3/page.tsx", Buffer.from("copy"), 0o644, { create: true }), { ok: false, reason: "exists" });
+  const copy = () => writeConfinedFile(root, "app/pricing-v2/page.tsx", Buffer.from("copy"), 0o644, { create: true });
+  if (await caseInsensitive(root)) {
+    // The volume finds `pricing-v2` as `Pricing-v2`, and native realpath names it so: a taken name, not a link.
+    assert.deepEqual(await copy(), { ok: false, reason: "exists" });
+  } else {
+    // A case-sensitive volume has no clash: `pricing-v2` is a folder of its own.
+    assert.equal((await copy()).ok, true);
+    // check-aiden-rules: allow no-source-grep-test reads a page file in a temp workspace, not Aiden source
+    assert.equal(await readFile(path.join(root, "app/pricing-v2/page.tsx"), "utf8"), "copy");
+  }
   // check-aiden-rules: allow no-source-grep-test reads a page file in a temp workspace, not Aiden source
-  assert.equal(await readFile(path.join(root, "app/Pricing-v2/page.tsx"), "utf8"), "theirs");
+  assert.equal(await readFile(path.join(root, "app/Pricing-v2/page.tsx"), "utf8"), "theirs", "the other page is never touched");
+  // A file where the new page's folder would go is taken on every volume.
+  assert.deepEqual(await writeConfinedFile(root, "app/pricing-v3/page.tsx", Buffer.from("copy"), 0o644, { create: true }), { ok: false, reason: "exists" });
   // Not for a folder the path only passes through: that one is still a refusal.
   assert.deepEqual(await writeConfinedFile(root, "app/pricing-v3/deeper/page.tsx", Buffer.from("copy"), 0o644, { create: true }), { ok: false, reason: "io" });
+});
+
+/**
+ * Swaps `app` for a link to `outside` and back around `during`, the way a
+ * process racing the write would: the same folder (inode) comes back after.
+ */
+async function linkedOutDuring<T>(root: string, outside: string, during: () => Promise<T>): Promise<T> {
+  const app = path.join(root, "app");
+  const aside = path.join(root, "app-aside");
+  await rename(app, aside);
+  await symlink(outside, app);
+  try {
+    return await during();
+  } finally {
+    await rm(app);
+    await rename(aside, app);
+  }
+}
+
+/** The outside file's bytes, or none when it isn't there. */
+const outsideBytes = async (file: string) => (await readFile(file).catch(() => Buffer.alloc(0))).length;
+
+test("confinement: a folder above a new page linked out while the page is created gets none of its bytes", async (t) => {
+  const outside = await workspace(t, { "routes/keep.tsx": "" });
+  const root = await workspace(t, { "app/routes/home.tsx": "" });
+  const swapped = { writeFile: (file: string, bytes: Buffer, mode: number) => linkedOutDuring(root, outside, () => createPageFile(file, bytes, mode)) };
+  const written = await writeConfinedFile(root, "app/routes/pricing-v2.tsx", Buffer.from("the copy"), 0o644, { create: false, fs: swapped });
+  assert.deepEqual(written, { ok: false, reason: "link" });
+  assert.equal(await outsideBytes(path.join(outside, "routes/pricing-v2.tsx")), 0, "no byte outside the workspace");
+  assert.equal(await exists(path.join(root, "app/routes/pricing-v2.tsx")), false);
+});
+
+test("confinement: a folder above a new page linked out between the folder's check and the create gets none of its bytes", async (t) => {
+  const outside = await workspace(t, { "routes/keep.tsx": "" });
+  const root = await workspace(t, { "app/routes/home.tsx": "" });
+  const racing = {
+    writeFile: (file: string, bytes: Buffer, mode: number) =>
+      createPageFile(file, bytes, mode, async () => {
+        // Linked out from here until the create is done, then put back.
+        await rename(path.join(root, "app"), path.join(root, "app-aside"));
+        await symlink(outside, path.join(root, "app"));
+        restore = async () => {
+          await rm(path.join(root, "app"));
+          await rename(path.join(root, "app-aside"), path.join(root, "app"));
+        };
+      }),
+  };
+  let restore = async () => undefined;
+  const written = await writeConfinedFile(root, "app/routes/pricing-v2.tsx", Buffer.from("the copy"), 0o644, { create: false, fs: racing }).finally(() => restore());
+  assert.equal(await outsideBytes(path.join(outside, "routes/pricing-v2.tsx")), 0, "no byte outside the workspace");
+  if (written.ok) {
+    // Linux creates through the folder's own handle, so the copy lands in the workspace whatever the path names meanwhile.
+    // check-aiden-rules: allow no-source-grep-test reads a page file in a temp workspace, not Aiden source
+    assert.equal(await readFile(path.join(root, "app/routes/pricing-v2.tsx"), "utf8"), "the copy");
+  } else {
+    assert.deepEqual(written, { ok: false, reason: "link" });
+    assert.equal(await exists(path.join(root, "app/routes/pricing-v2.tsx")), false);
+  }
 });

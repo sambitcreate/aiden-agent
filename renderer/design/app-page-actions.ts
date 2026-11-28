@@ -131,7 +131,8 @@ export function useAppPageActions({
   trashing: ReadonlySet<string>;
 } {
   const [trashing, setTrashing] = React.useState<ReadonlySet<string>>(() => new Set());
-  const pendingTrash = React.useRef<{ revision: number; file: string; timer: ReturnType<typeof setTimeout> } | null>(null);
+  /** Each Trash reply still waiting for the canvas to show its revision, by that revision (Pullfrog r4724521924): one Trash never drops another's toast. */
+  const pendingTrash = React.useRef(new Map<number, { file: string; timer: ReturnType<typeof setTimeout> }>());
   const frameOf = React.useCallback((id: string): DesignFrame | undefined => latestDoc.current?.frames.find((frame) => frame.id === id), [latestDoc]);
 
   const refuse = React.useCallback(
@@ -259,21 +260,20 @@ export function useAppPageActions({
         // The frames are gone from the canvas; focus stays with it, so ⌘Z works at once, unless the person moved on.
         undim();
         focusCanvas({ unlessMoved: true });
-        if (pendingTrash.current) clearTimeout(pendingTrash.current.timer);
         const shownRevision = latestDoc.current?.revision ?? -1;
         if (shownRevision >= result.revision) {
           // Only a canvas at exactly the Trash's revision took it in as its own step; a later one carried it in with another change.
-          pendingTrash.current = null;
           showTrashToast(result.trashed, shownRevision === result.revision);
           return;
         }
         // Undo always undoes the Trash step: it's offered only once the canvas shows that step, as its own.
+        const pending = pendingTrash.current;
         const timer = setTimeout(() => {
-          if (pendingTrash.current?.timer !== timer) return;
-          pendingTrash.current = null;
+          if (pending.get(result.revision)?.timer !== timer) return;
+          pending.delete(result.revision);
           showTrashToast(result.trashed, false);
         }, TRASH_UNDO_WAIT_MS);
-        pendingTrash.current = { revision: result.revision, file: result.trashed, timer };
+        pending.set(result.revision, { file: result.trashed, timer });
       })().finally(() => busy.current.delete(id));
     },
     [chatId, flush, focusCanvas, frameOf, latestDoc, refuse, showTrashToast],
@@ -281,19 +281,21 @@ export function useAppPageActions({
 
   React.useEffect(() => {
     const pending = pendingTrash.current;
-    if (!pending || doc.revision < pending.revision) return;
-    clearTimeout(pending.timer);
-    pendingTrash.current = null;
-    showTrashToast(pending.file, doc.revision === pending.revision);
+    for (const [revision, entry] of [...pending]) {
+      if (doc.revision < revision) continue;
+      clearTimeout(entry.timer);
+      pending.delete(revision);
+      showTrashToast(entry.file, doc.revision === revision);
+    }
   }, [doc.revision, showTrashToast]);
 
-  React.useEffect(
-    () => () => {
-      if (pendingTrash.current) clearTimeout(pendingTrash.current.timer);
-      pendingTrash.current = null;
-    },
-    [],
-  );
+  React.useEffect(() => {
+    const pending = pendingTrash.current;
+    return () => {
+      for (const entry of pending.values()) clearTimeout(entry.timer);
+      pending.clear();
+    };
+  }, []);
 
   // What the ledger did after an undo or redo, in this chat only.
   React.useEffect(
