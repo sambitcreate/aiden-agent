@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "../shared/path-containment.js";
+import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 
 export type AidenOpaqueHandleKind = "loc" | "cur" | "sel" | "file";
 
@@ -39,6 +40,43 @@ export class AidenOpaqueHandleError extends Error {
   constructor(readonly code: AidenOpaqueHandleErrorCode) {
     super(code);
   }
+}
+
+export type AidenOpaqueHandleResourceKind = "file" | "folder-browser";
+
+export function mapAidenOpaqueHandleError(
+  error: unknown,
+  resourceKind: AidenOpaqueHandleResourceKind,
+): never {
+  if (!(error instanceof AidenOpaqueHandleError)) throw error;
+  const status = error.code === "handle_wrong_device"
+    ? 403
+    : error.code === "handle_expired"
+      ? 410
+      : error.code === "handle_capacity"
+        ? 429
+        : error.code === "root_policy_changed" ||
+            error.code === "filesystem_identity_changed" ||
+            error.code === "path_outside_root"
+          ? 409
+          : 400;
+  const message = resourceKind === "file"
+    ? error.code === "handle_expired"
+      ? "This file link expired. Refresh Files and try again."
+      : error.code === "handle_capacity"
+        ? "Aiden's file-handle capacity is temporarily full."
+        : "This file link is no longer valid. Refresh Files and try again."
+    : error.code === "handle_expired"
+      ? "This folder-browser link expired. Refresh the approved roots and try again."
+      : error.code === "handle_capacity"
+        ? "Aiden's folder-browser handle capacity is temporarily full."
+        : "This folder-browser link is no longer valid.";
+  throw new AidenRemoteServiceError(
+    error.code,
+    message,
+    status,
+    error.code === "handle_capacity",
+  );
 }
 
 export interface AidenOpaqueHandleIssueOptions {

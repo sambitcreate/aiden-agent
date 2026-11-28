@@ -2,35 +2,31 @@ import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { mapWorkspaceMetadata } from "./workspace-metadata.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
-import type {
-  AidenRemoteFileDocument,
-  AidenRemoteFileEntry,
-  AidenRemoteFileIndex,
-} from "./aiden-remote-files.js";
+import {
+  FILE_HANDLE_TTL_MS,
+  parseWrite,
+  projectedFileEntry,
+  projectedFileIndex,
+  readSnapshotFile,
+  safeDisplayPath,
+  writeSnapshotFile,
+  type AidenRemoteFileDocument,
+  type AidenRemoteFileEntry,
+  type AidenRemoteFileIndex,
+} from "./aiden-remote-file-helpers.js";
 import {
   AidenOpaqueHandleError,
   AidenOpaqueHandleStore,
   inspectAidenFilesystemIdentity,
-  rebindAidenFileHandleToSavedFile,
+  mapAidenOpaqueHandleError,
   type AidenOpaqueHandleClaims,
 } from "./aiden-remote-opaque-handles.js";
 import {
   BotRuntimeAuthorityError,
   type BotRuntimeAuthorityAdmission,
 } from "./bot-runtime-authority.js";
-import {
-  listWorkspaceFiles,
-  readWorkspaceFile,
-  WorkspaceFileError,
-  writeWorkspaceFileInstalling,
-  type WorkspaceFileDocument,
-  type WorkspaceFileEntry,
-} from "./workspace-files.js";
+import { listWorkspaceFiles } from "./workspace-files.js";
 import type { ChatStore } from "./chat-store-core.js";
-
-const FILE_HANDLE_TTL_MS = 10 * 60_000;
-const MAX_DISPLAY_PATH_LENGTH = 4_096;
-const MAX_WIRE_FILE_SIZE = 5 * 1_048_576;
 
 type BotRuntimeAuthorityPort = {
   admit(input: {
@@ -51,64 +47,6 @@ type BotFileAuthorityContext = {
   revalidateBeforeEffect(): Promise<void>;
 };
 
-function safeDisplayPath(value: string): string {
-  if (
-    !value ||
-    value.length > MAX_DISPLAY_PATH_LENGTH ||
-    path.isAbsolute(value) ||
-    value.split("/").some((part) => part === "..") ||
-    [...value].some((character) => {
-      const code = character.codePointAt(0) ?? 0;
-      return code <= 0x1f || code === 0x7f;
-    })
-  ) {
-    throw new AidenRemoteServiceError(
-      "workspace_unavailable",
-      "A Bot file could not be projected safely.",
-      409,
-    );
-  }
-  return value;
-}
-
-function languageFor(entry: WorkspaceFileEntry): string | undefined {
-  if (entry.kind !== "file") return undefined;
-  const extension = path.extname(entry.name).slice(1).toLowerCase();
-  const names: Record<string, string> = {
-    c: "C", cc: "C++", cpp: "C++", css: "CSS", go: "Go", h: "C Header",
-    html: "HTML", java: "Java", js: "JavaScript", json: "JSON", jsx: "JSX",
-    kt: "Kotlin", md: "Markdown", mjs: "JavaScript", py: "Python", rb: "Ruby",
-    rs: "Rust", sh: "Shell", swift: "Swift", ts: "TypeScript", tsx: "TSX",
-    yaml: "YAML", yml: "YAML",
-  };
-  return names[extension];
-}
-
-function mapHandleError(error: unknown): never {
-  if (!(error instanceof AidenOpaqueHandleError)) throw error;
-  const status = error.code === "handle_wrong_device"
-    ? 403
-    : error.code === "handle_expired"
-      ? 410
-      : error.code === "handle_capacity"
-        ? 429
-        : error.code === "root_policy_changed" ||
-            error.code === "filesystem_identity_changed" ||
-            error.code === "path_outside_root"
-          ? 409
-          : 400;
-  throw new AidenRemoteServiceError(
-    error.code,
-    error.code === "handle_expired"
-      ? "This file link expired. Refresh Files and try again."
-      : error.code === "handle_capacity"
-        ? "Aiden's file-handle capacity is temporarily full."
-        : "This file link is no longer valid. Refresh Files and try again.",
-    status,
-    error.code === "handle_capacity",
-  );
-}
-
 function mapAuthorityError(error: unknown): never {
   if (!(error instanceof BotRuntimeAuthorityError)) throw error;
   if (error.classification === "bot_unavailable" || error.classification === "chat_unavailable") {
@@ -124,38 +62,6 @@ function mapAuthorityError(error: unknown): never {
     409,
     true,
   );
-}
-
-function parseWrite(value: unknown): { content: string; expectedVersion: string } {
-  const record = value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-  if (
-    !record ||
-    Object.keys(record).length !== 2 ||
-    typeof record.content !== "string" ||
-    Buffer.byteLength(record.content, "utf8") > 1_500_000 ||
-    typeof record.expectedVersion !== "string" ||
-    !/^[0-9a-f]{64}$/u.test(record.expectedVersion)
-  ) {
-    throw new AidenRemoteServiceError("invalid_request", "The file save request is invalid.", 400);
-  }
-  return { content: record.content, expectedVersion: record.expectedVersion };
-}
-
-function projectedDocument(
-  fileId: string,
-  displayPath: string,
-  document: WorkspaceFileDocument,
-): AidenRemoteFileDocument {
-  return {
-    id: fileId,
-    displayPath,
-    content: document.content,
-    version: document.version,
-    truncated: false,
-    ...(document.warning ? { warning: [...document.warning].slice(0, 500).join("") } : {}),
-  };
 }
 
 function requireManagedHome(admission: BotRuntimeAuthorityAdmission): void {
@@ -305,7 +211,7 @@ export class AidenRemoteBotFileService {
           // Share the same budget as workspace/Gemini/legacy file listings.
           const [inspected] = await mapWorkspaceMetadata([entry], async () => {
             try {
-              const displayPath = safeDisplayPath(entry.path);
+              const displayPath = safeDisplayPath(entry.path, "bot");
               await authority.revalidateBeforeEffect();
               const claims = await this.claims(deviceId, authority, displayPath, snapshotId);
               return { displayPath, claims };
@@ -320,31 +226,22 @@ export class AidenRemoteBotFileService {
           }
           const { displayPath, claims } = inspected;
           try {
-            entries.push({
-              id: this.handles.issue("file", claims, { listing }),
-              displayPath,
-              name: [...entry.name].slice(0, 255).join(""),
-              kind: entry.kind,
-              ...(entry.size !== undefined && entry.size <= MAX_WIRE_FILE_SIZE
-                ? { size: entry.size }
-                : {}),
-              ...(languageFor(entry) ? { language: languageFor(entry)! } : {}),
-            });
+            entries.push(
+              projectedFileEntry(
+                this.handles.issue("file", claims, { listing }),
+                displayPath,
+                entry,
+              ),
+            );
           } catch (error) {
             if (error instanceof AidenOpaqueHandleError && error.code === "handle_capacity") {
-              mapHandleError(error);
+              mapAidenOpaqueHandleError(error, "file");
             }
             if (error instanceof BotRuntimeAuthorityError) mapAuthorityError(error);
             omitted = true;
           }
         }
-        return {
-          snapshotId,
-          entries,
-          truncated: index.truncated || omitted,
-          maxEntries: 4_000,
-          maxDepth: 20,
-        };
+        return projectedFileIndex(snapshotId, entries, index.truncated || omitted);
       } catch (caught) {
         const error = authority.signal.aborted && authority.signal.reason instanceof Error
           ? authority.signal.reason : caught;
@@ -376,13 +273,13 @@ export class AidenRemoteBotFileService {
       try {
         stored = this.handles.claimsFor(fileId, "file");
       } catch (error) {
-        mapHandleError(error);
+        mapAidenOpaqueHandleError(error, "file");
       }
       const botId = await this.botIdForChat(chatId);
       return await this.withAuthority(botId, chatId, async (authority) => {
         try {
           if (!stored.displayPath) throw new AidenOpaqueHandleError("handle_invalid");
-          const displayPath = safeDisplayPath(stored.displayPath);
+          const displayPath = safeDisplayPath(stored.displayPath, "bot");
           await authority.revalidateBeforeEffect();
           const current = await this.claims(
             deviceId,
@@ -400,7 +297,7 @@ export class AidenRemoteBotFileService {
             identity: { device: current.filesystemDevice, inode: current.filesystemInode },
           });
         } catch (error) {
-          if (error instanceof AidenOpaqueHandleError) mapHandleError(error);
+          if (error instanceof AidenOpaqueHandleError) mapAidenOpaqueHandleError(error, "file");
           if (error instanceof BotRuntimeAuthorityError) mapAuthorityError(error);
           throw error;
         }
@@ -415,22 +312,15 @@ export class AidenRemoteBotFileService {
     chatId: string,
     fileId: string,
   ): Promise<AidenRemoteFileDocument> {
-    return this.withResolvedFile(deviceId, chatId, fileId, async (input) => {
-      try {
-        return projectedDocument(
-          fileId,
-          input.displayPath,
-          await readWorkspaceFile(input.folderPath, input.displayPath, input.signal,
-            { exclusiveIdentity: input.identity }),
-        );
-      } catch {
-        throw new AidenRemoteServiceError(
-          "workspace_unavailable",
-          "This file cannot currently be read as bounded UTF-8 text.",
-          409,
-        );
-      }
-    });
+    return this.withResolvedFile(deviceId, chatId, fileId, (input) =>
+      readSnapshotFile({
+        fileId,
+        folderPath: input.folderPath,
+        displayPath: input.displayPath,
+        signal: input.signal,
+        identity: input.identity,
+      }),
+    );
   }
 
   write(
@@ -440,31 +330,16 @@ export class AidenRemoteBotFileService {
     value: unknown,
   ): Promise<AidenRemoteFileDocument> {
     const input = parseWrite(value);
-    return this.withResolvedFile(deviceId, chatId, fileId, async (resolved) => {
-      try {
-        const { document, installed } = await writeWorkspaceFileInstalling(
-          resolved.folderPath,
-          resolved.displayPath,
-          input.content,
-          input.expectedVersion,
-          resolved.signal,
-        );
-        await rebindAidenFileHandleToSavedFile(this.handles, fileId, resolved.folderPath, resolved.displayPath, installed);
-        return projectedDocument(fileId, resolved.displayPath, document);
-      } catch (error) {
-        if (error instanceof WorkspaceFileError && error.code === "changed_on_disk") {
-          throw new AidenRemoteServiceError(
-            "revision_conflict",
-            "This file changed on your computer. Reload it before saving.",
-            409,
-          );
-        }
-        throw new AidenRemoteServiceError(
-          "workspace_unavailable",
-          "Aiden could not safely save this file on your computer.",
-          409,
-        );
-      }
-    });
+    return this.withResolvedFile(deviceId, chatId, fileId, (resolved) =>
+      writeSnapshotFile({
+        handles: this.handles,
+        fileId,
+        folderPath: resolved.folderPath,
+        displayPath: resolved.displayPath,
+        content: input.content,
+        expectedVersion: input.expectedVersion,
+        signal: resolved.signal,
+      }),
+    );
   }
 }
