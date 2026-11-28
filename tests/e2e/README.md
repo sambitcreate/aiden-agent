@@ -35,19 +35,24 @@ the macOS CI gate). On Linux, follow CI's Linux E2E step: its apt packages,
 Hosted CI splits deterministic spec files across five isolated macOS runners (`e2e`)
 and three Ubuntu runners (`linux-e2e`), each with one Playwright worker. On pull
 requests the macOS job runs only the selected specs from the spec map's `macos`
-list, on one runner, and Linux runs the rest; see `docs/ci.md`. macOS shards reuse the
+list, scaling shards past the 900s net budget (one runner today at `374s`), while
+ignoring `hostOnly` specs that require local macOS Accessibility/Screen Recording
+permissions (`AIDEN_E2E_COMPUTER_USE_HOST=1`), and Linux runs the rest; see
+`docs/ci.md`. macOS shards reuse the
 `build` job's output; each Ubuntu shard builds the app itself and runs under `xvfb-run`.
 `scripts/ci-e2e-shards.mjs` balances files using recorded hosted durations when
 the Actions cache is present, otherwise the conservative `FILE_SECONDS` table,
 and automatically assigns newly added specs (default 30s). After `npm run build`,
 reproduce one shard with
 `node scripts/ci-e2e-shards.mjs 1/5` for macOS or `1/3` for Linux; append `--list` to inspect its files.
-Pull-request CI also reads `scripts/ci-e2e-spec-map.json` to run only specs whose
-listed source prefixes match the diff. Add every new deterministic spec to that
-map with the `renderer/` / `main/` paths it covers; fixtures and Playwright config
-stay in the map's `full` list so they keep the whole suite. Prefixes must exist on
-disk (exact file, directory, or a stem continued by `/`, `.`, or `-`). Main, the
-merge queue and releases always run every spec.
+Pull-request CI also expands changed files through the reverse-import graph before
+matching `scripts/ci-e2e-spec-map.json` (escalating to `all` on high fanout or when
+no active Linux spec is selected). Add every new deterministic spec to that
+map with the `renderer/` / `main/` paths it covers, list any `darwin`-divergent
+spec in `macos` (or `hostOnly`), and verify with `npm run test:ci-policy`; fixtures
+and Playwright config stay in the map's `full` list so they keep the whole suite.
+Prefixes must exist on disk (exact file, directory, or a stem continued by `/`,
+`.`, or `-`). Main, the merge queue and releases always run every hosted spec.
 Never run these shards concurrently against the same checkout or desktop session.
 
 The production-profile diagnostics spec runs separately after the desktop build job's
