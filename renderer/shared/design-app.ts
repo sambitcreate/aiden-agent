@@ -78,7 +78,51 @@ export type DesignAppProblem =
    */
   | { problem: "already-running"; started?: true }
   /** 2c: `.aiden/canvas.json`'s `apps[].url` for this root isn't a loopback http origin. */
-  | { problem: "attach-url-invalid" };
+  | { problem: "attach-url-invalid" }
+  /** 3d (S103): this workspace gets no design app, for this reason. */
+  | { problem: "scaffold-refused"; why: MockRefusal }
+  /** 3d (S107): writing the design app failed at this step, and what Aiden wrote was rolled back. */
+  | { problem: "scaffold-failed"; step: "template" | "write" | "verify" | "design-md" };
+
+// ---- 3d: mock apps (S102–S116) ----
+
+export type DesignMockKind = "react-nonweb" | "starter";
+
+/** Why a workspace gets no design app (S103, S104). */
+export type MockRefusal =
+  | "has-web-app"
+  | "workspace-runner"
+  | "unknown-framework"
+  | "no-dev-script"
+  | "invalid-package-json"
+  | "truncated"
+  | "unsupported-config"
+  | "no-free-folder"
+  | "in-workspaces"
+  | "read-only";
+
+export const MOCK_REFUSALS: readonly MockRefusal[] = Object.freeze([
+  "has-web-app",
+  "workspace-runner",
+  "unknown-framework",
+  "no-dev-script",
+  "invalid-package-json",
+  "truncated",
+  "unsupported-config",
+  "no-free-folder",
+  "in-workspaces",
+  "read-only",
+]);
+
+/** What design mode can do for a workspace with no web app (S103). */
+export type DesignMockOffer =
+  | { offer: "react-nonweb"; folder: string; source: string; shell?: "electron" | "tauri"; reactNative?: true }
+  | { offer: "starter"; folder: string }
+  | { offer: "existing"; folder: string }
+  | { offer: "refused"; why: MockRefusal; folder?: string };
+
+/** The snapshot's `mock` field: the offer, plus a toolchain problem the last scaffold hit. */
+export type DesignMockState = DesignMockOffer & { problem?: ToolchainProblem };
 
 export interface DesignAppStatus {
   workspaceId: string;
@@ -107,6 +151,8 @@ export interface DesignAppStatus {
   /** Crashed: at most 2 000 characters of the server's own output. Untrusted text. */
   tail?: string;
   problem?: DesignAppProblem;
+  /** 3d: a design app (its package.json carries Aiden's marker, S104). A label only; nothing trusts it. */
+  mock?: true;
   revision: number;
 }
 
@@ -116,6 +162,8 @@ export interface DesignAppCandidate {
   frameworkLabel: string;
   script?: string;
   name?: string;
+  /** 3d: a design app (S104). */
+  mock?: true;
 }
 
 export interface DesignAppsSnapshot {
@@ -127,6 +175,8 @@ export interface DesignAppsSnapshot {
   candidates: DesignAppCandidate[];
   /** Roots `.aiden/canvas.json` describes with a script. */
   chosen: string[];
+  /** 3d: with the flag on and no web app, what a design app would be (S112). Absent otherwise. */
+  mock?: DesignMockState;
 }
 
 export type DesignAppConsentRequest =
@@ -164,6 +214,28 @@ export type DesignAppConsentRequest =
       processName: string;
       /** The holder's folder relative to the workspace, POSIX, at most 200 characters. */
       folder: string;
+    }
+  /**
+   * 3d (S102): add a design app. One card per workspace; its Allow is both the
+   * person's yes and the launch consent, so no launch card follows.
+   */
+  | {
+      kind: "scaffold";
+      requestId: string;
+      chatId: string;
+      workspaceId: string;
+      /** "design-app" or "design-app-2" … "design-app-9". */
+      folder: string;
+      mockKind: DesignMockKind;
+      /** "Electron", "Tauri" or "React Native" for react-nonweb. */
+      shellLabel?: string;
+      installCommand: "npm ci";
+      runCommand: "npm run dev";
+      scripts: Array<{ name: "dev"; text: string }>;
+      /** Direct dependencies with exact versions, from the template. */
+      packages: Array<{ name: string; version: string }>;
+      /** Paths relative to the folder, sorted; the card shows at most 40, then "and N more". */
+      files: readonly string[];
     };
 
 /** One row of Connect running server… (2c D6). */
@@ -225,7 +297,27 @@ export const DESIGN_APP_CHANNELS = {
   connect: "designApp:connect",
   /** (chatId, appRoot) → DesignAppStatus. */
   retry: "designApp:retry",
+  /** 3d: (chatId, { pageId }) → DesignAppScaffoldResult; throws on a refusal, like every designApp:* handler. */
+  scaffold: "designApp:scaffold",
 } as const;
+
+/** What a scaffold answered (S113). */
+export type DesignAppScaffoldResult =
+  | {
+      status: "scaffolded";
+      root: string;
+      kind: DesignMockKind;
+      app: DesignAppStatus;
+      /** "pending": the start hasn't reached running; `/` is placed when it does (kept for one retry). */
+      placed: "placed" | "already" | "pending" | "none";
+      aliases: Record<string, string>;
+      stubs: Record<string, string>;
+      globals: string[];
+      designMd: "drafted" | "starter";
+      styleSources: string[];
+    }
+  | { status: "existing"; root: string; app: DesignAppStatus }
+  | { status: "problem"; problem: DesignAppProblem };
 
 /**
  * Whether a chat may run its workspace's apps: only an attended desktop chat,
@@ -236,6 +328,51 @@ export const DESIGN_APP_CHANNELS = {
 export function chatRunsDesignApps<T extends { botId?: string; owner?: unknown }>(chat: T | null | undefined): chat is T {
   return chat !== null && chat !== undefined && !chat.botId && chat.owner === undefined;
 }
+
+/** The scaffold card's network sentence (S106). */
+export const DESIGN_APP_SCAFFOLD_NETWORK = "Downloads these from the npm registry with your npm settings.";
+/** In place of 2b's install note on the scaffold card: the template's .npmrc turns install scripts off (S106). */
+export const DESIGN_APP_SCAFFOLD_NO_SCRIPTS = "The packages' install scripts don't run.";
+
+/** One fixed sentence per refusal, saying what to fix (S103). `folder` names the design-app folder for in-workspaces. */
+export function mockRefusalMessage(why: MockRefusal, folder = "design-app"): string {
+  switch (why) {
+    case "has-web-app":
+      return "This workspace already has a web app, so design mode runs that instead of adding a design app.";
+    case "workspace-runner":
+      return "This workspace's dev script hands off to a workspace runner. Name the app in .aiden/canvas.json, or start it yourself and use Connect running server….";
+    case "unknown-framework":
+      return "This workspace has a dev script, but design mode can't tell which web framework it runs. Name the app in .aiden/canvas.json, or start it yourself and use Connect running server….";
+    case "no-dev-script":
+      return "This workspace's app has no dev, start or serve script. Add one to its package.json, then try again.";
+    case "invalid-package-json":
+      return "A package.json in this workspace can't be read as JSON. Fix it, then try again.";
+    case "truncated":
+      return "This workspace has too many folders for design mode to check them all, so it won't add a design app. Name the app in .aiden/canvas.json instead.";
+    case "unsupported-config":
+      return ".aiden/canvas.json is from a newer Aiden, so design mode can't add a design app to it.";
+    case "no-free-folder":
+      return "design-app and design-app-2 through design-app-9 are all taken by other folders. Rename one, then try again.";
+    case "in-workspaces":
+      return `This workspace's workspaces patterns would include ${folder}, so its install would join yours. Add "!${folder}" to them, then try again.`;
+    case "read-only":
+      return "Aiden can only read this workspace's folder, so it can't add a design app. Give it write access, then try again.";
+  }
+}
+
+/** Which fixed hint a design app's failed install gets, read from npm's untrusted output (S112). Never shown itself. */
+export function installFailureHint(tail: string): "network" | "auth" | "other" {
+  if (/\b(?:E401|E403|ENEEDAUTH)\b/u.test(tail)) return "auth";
+  if (/\b(?:ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENETUNREACH)\b/u.test(tail)) return "network";
+  if (/\bnetwork request to \S+ failed\b/u.test(tail)) return "network";
+  return "other";
+}
+
+const INSTALL_HINTS: Record<"network" | "auth" | "other", string> = {
+  network: "The design app's install needs the npm registry. Check your network or proxy, then Retry.",
+  auth: "The npm registry refused the download. Check your npm sign-in or registry settings, then Retry.",
+  other: "Show logs has npm's output.",
+};
 
 /** The S2 sentence every launch card ends with. */
 export const DESIGN_APP_CONSENT_SCOPE =
@@ -272,8 +409,19 @@ export function toolchainProblemMessage(problem: ToolchainProblem): string {
   }
 }
 
-/** A fixed sentence per problem. Never includes log text: tails travel separately, fenced or escaped. */
-export function designAppProblemMessage(problem: DesignAppProblem): string {
+/**
+ * A fixed sentence per problem. Never includes log text: tails travel separately, fenced or escaped.
+ * For a design app (`mock`), a failed or timed-out install adds one fixed hint (S112).
+ */
+export function designAppProblemMessage(problem: DesignAppProblem, options: { mock?: boolean } = {}): string {
+  const base = problemSentence(problem);
+  if (!options.mock) return base;
+  if (problem.problem === "install-failed") return `${base} ${INSTALL_HINTS[installFailureHint(problem.tail)]}`;
+  if (problem.problem === "install-timeout") return `${base} ${INSTALL_HINTS.network}`;
+  return base;
+}
+
+function problemSentence(problem: DesignAppProblem): string {
   switch (problem.problem) {
     case "unavailable":
       return "Live apps are not available.";
@@ -332,6 +480,19 @@ export function designAppProblemMessage(problem: DesignAppProblem): string {
         : "Design mode is already connected to a server for this app, and Aiden never restarts or replaces a server it didn't start. Disconnect it first.";
     case "attach-url-invalid":
       return "The url for this app in .aiden/canvas.json can't be connected. Use http://127.0.0.1:<port>, http://localhost:<port> or http://[::1]:<port>, with no path.";
+    case "scaffold-refused":
+      return mockRefusalMessage(problem.why);
+    case "scaffold-failed":
+      switch (problem.step) {
+        case "template":
+          return "Aiden couldn't read its design app template, so nothing was written. Reinstall Aiden, then try again.";
+        case "write":
+          return "Aiden couldn't write the design app, so it removed what it had written. Check the folder, then try again.";
+        case "verify":
+          return "A design app file changed while Aiden was writing it, so Aiden didn't start it. Start it again to review it.";
+        case "design-md":
+          return "Aiden couldn't draft the design app's DESIGN.md, so nothing was written. Try again.";
+      }
   }
 }
 

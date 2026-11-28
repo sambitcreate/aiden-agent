@@ -12,6 +12,9 @@ import {
   FRAMEWORK_IDS,
   logDisplayChunk,
   logDisplayText,
+  installFailureHint,
+  MOCK_REFUSALS,
+  mockRefusalMessage,
   type DesignAppProblem,
   type DesignAppStatus,
   type DesignAppsSnapshot,
@@ -46,6 +49,10 @@ const EVERY_PROBLEM: DesignAppProblem[] = [
   { problem: "attach-not-loopback" },
   { problem: "attach-unreachable" },
   { problem: "attach-not-in-app" },
+  { problem: "scaffold-refused", why: "workspace-runner" },
+  { problem: "scaffold-failed", step: "template" },
+  { problem: "scaffold-failed", step: "write" },
+  { problem: "scaffold-failed", step: "verify" },
 ];
 
 test("every problem has a fixed message that never contains its tail", () => {
@@ -354,4 +361,72 @@ test("2c's problems have their own fixed sentences", () => {
   const seen = new Set(all.map((problem) => designAppProblemMessage(problem)));
   assert.equal(seen.size, all.length, "each problem reads differently");
   for (const problem of all) assert.equal(designAppProblemMessage(problem).includes(MARKER), false);
+});
+
+// ---- 3d: mock apps ----
+
+test("every refusal has a message that says what to fix", () => {
+  const seen = new Set<string>();
+  for (const why of MOCK_REFUSALS) {
+    const message = mockRefusalMessage(why, "design-app");
+    assert.ok(message.length > 20, why);
+    assert.ok(message.endsWith("."), `${why}: ${message}`);
+    seen.add(message);
+  }
+  assert.equal(seen.size, MOCK_REFUSALS.length, "each refusal reads differently");
+  const inWorkspaces = mockRefusalMessage("in-workspaces", "design-app-2");
+  assert.match(inWorkspaces, /design-app-2/u);
+  assert.match(inWorkspaces, /"!design-app-2"/u, "it says how to exclude the folder");
+  assert.match(mockRefusalMessage("workspace-runner"), /Connect running server/u);
+  // A refusal problem reads as its refusal.
+  assert.equal(
+    designAppProblemMessage({ problem: "scaffold-refused", why: "no-dev-script" }),
+    mockRefusalMessage("no-dev-script"),
+  );
+});
+
+test("installFailureHint reads npm's network and auth codes", () => {
+  const rows: Array<[string, "network" | "auth" | "other"]> = [
+    ["npm error code ENOTFOUND\nnpm error errno ENOTFOUND\nnpm error network request to https://registry.npmjs.org/react failed", "network"],
+    ["npm error code EAI_AGAIN\nnpm error syscall getaddrinfo", "network"],
+    ["npm error code ETIMEDOUT", "network"],
+    ["npm error code ECONNRESET\nnpm error network aborted", "network"],
+    ["npm error code ECONNREFUSED", "network"],
+    ["npm error code ENETUNREACH", "network"],
+    ["npm error network request to https://example.test/x.tgz failed, reason: socket hang up", "network"],
+    ["npm error code E401\nnpm error Unable to authenticate, need: Basic realm=\"Artifactory\"", "auth"],
+    ["npm error code E403\nnpm error 403 Forbidden - GET https://mirror.test/react", "auth"],
+    ["npm error code ENEEDAUTH\nnpm error need auth This command requires you to be logged in.", "auth"],
+    ["npm error code ERESOLVE\nnpm error ERESOLVE could not resolve", "other"],
+    ["npm error code EINTEGRITY\nnpm error sha512-abc integrity checksum failed", "other"],
+    ["", "other"],
+  ];
+  for (const [tail, hint] of rows) assert.equal(installFailureHint(tail), hint, tail.slice(0, 40));
+  // A code must be a whole word: ENOTFOUNDX or E4011 are not npm's codes.
+  assert.equal(installFailureHint("code E4011"), "other");
+});
+
+test("a mock app's failed install adds the hint; a web app's doesn't", () => {
+  const failed: DesignAppProblem = { problem: "install-failed", exitCode: 1, tail: "npm error code ENOTFOUND" };
+  const web = designAppProblemMessage(failed);
+  const mock = designAppProblemMessage(failed, { mock: true });
+  assert.ok(mock.startsWith(web), "the mock message keeps 2b's sentence");
+  assert.match(mock, /npm registry/u);
+  assert.doesNotMatch(web, /npm registry/u);
+  const auth = designAppProblemMessage({ problem: "install-failed", exitCode: 1, tail: "npm error code E401" }, { mock: true });
+  assert.match(auth, /sign-in/u);
+  const other = designAppProblemMessage({ problem: "install-failed", exitCode: 1, tail: "ERESOLVE" }, { mock: true });
+  assert.match(other, /Show logs/u);
+  const timeout = designAppProblemMessage({ problem: "install-timeout" }, { mock: true });
+  assert.ok(timeout.startsWith(designAppProblemMessage({ problem: "install-timeout" })));
+  assert.match(timeout, /npm registry/u);
+  // Other problems read the same for a mock.
+  assert.equal(designAppProblemMessage({ problem: "exposed" }, { mock: true }), designAppProblemMessage({ problem: "exposed" }));
+});
+
+test("the hint never repeats the tail's text", () => {
+  const tail = `npm error code ENOTFOUND\nnpm error network request to https://${MARKER}.example/react failed`;
+  const message = designAppProblemMessage({ problem: "install-failed", exitCode: 1, tail }, { mock: true });
+  assert.equal(message.includes(MARKER), false);
+  assert.equal(message.includes("example"), false);
 });
