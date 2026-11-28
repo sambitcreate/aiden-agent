@@ -2479,3 +2479,87 @@ test("repairs permissive modes on an existing private store", async (t) => {
   assert.equal(retainedIdentity.mode & 0o777, 0o644);
   assert.equal(retainedIdentity.nlink, 0);
 });
+
+test("V1 run store caches secondary indexes across stat checks, returns defensive clones, and reloads on external replacement or mode drift", async (t) => {
+  const directory = await testDirectory(t);
+  const store = createSubagentRunStore(async () => directory);
+  t.after(() => store.close());
+
+  const first = snapshot({ runId: "run-1", chatId: "chat-1", updatedAt: 20, finishedAt: 20 });
+  const second = snapshot({
+    runId: "run-2",
+    childId: "child-2",
+    chatId: "chat-2",
+    updatedAt: 30,
+    finishedAt: 30,
+  });
+  await store.upsert(first);
+  await store.upsert(second);
+
+  const got = await store.get("run-1");
+  const listed = await store.listByChat("chat-1");
+  const detail = await store.getWithEffectActivity("run-1", "chat-1");
+  assert.deepEqual(got, first);
+  assert.deepEqual(listed, [first]);
+  assert.deepEqual(detail, { snapshot: first, effects: [] });
+  assert.equal(await store.getWithEffectActivity("run-1", "chat-2"), null);
+
+  // Mutating returned values never mutates cached records.
+  got!.warnings.push("mutated");
+  listed[0]!.label = "mutated";
+  listed.pop();
+  detail!.snapshot.label = "mutated";
+  assert.deepEqual(await store.get("run-1"), first);
+  assert.deepEqual(await store.listByChat("chat-1"), [first]);
+
+  // External replacement with permissive mode repairs mode and reloads updated contents.
+  const target = path.join(directory, "runs.json");
+  const externallyEdited = snapshot({
+    runId: "run-1",
+    chatId: "chat-1",
+    revision: 2,
+    label: "Externally edited V1",
+    updatedAt: 40,
+    finishedAt: 40,
+  });
+  await fs.writeFile(
+    target,
+    `${JSON.stringify({ version: 1, runs: [second, externallyEdited], pendingChatDeletions: [] }, null, 2)}\n`,
+    { mode: 0o644 },
+  );
+  await fs.chmod(target, 0o644);
+  assert.equal((await store.get("run-1"))?.label, "Externally edited V1");
+  assert.equal((await fs.stat(target)).mode & 0o777, 0o600);
+
+  // External deletion clears cached runs on the next generation-fenced read.
+  await fs.rm(target);
+  assert.equal(await store.get("run-1"), null);
+  assert.deepEqual(await store.listByChat("chat-2"), []);
+
+  // Controlled storage without optional stat falls back to read() generation fencing cleanly.
+  let reads = 0;
+  const controlled: ControlledStorageState = {
+    contents: undefined,
+    generation: "missing",
+    generationCounter: 0,
+    readFailures: 0,
+  };
+  const base = controlledStorage(controlled);
+  const fallbackStore = createSubagentRunStore(async () => "/private/v1-no-stat", {
+    storageFactory: () => ({
+      ...base,
+      async read() {
+        reads += 1;
+        return base.read();
+      },
+    }),
+  });
+  await fallbackStore.upsert(first);
+  const readsAfterUpsert = reads;
+  assert.deepEqual(await fallbackStore.get("run-1"), first);
+  assert.deepEqual(await fallbackStore.getWithEffectActivity("run-1", "chat-1"), {
+    snapshot: first,
+    effects: [],
+  });
+  assert.equal(reads - readsAfterUpsert, 2);
+});

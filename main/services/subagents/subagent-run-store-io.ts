@@ -23,20 +23,41 @@ export type SubagentRunStoreReadResult =
       generation: string;
     };
 
+export type SubagentRunStoreStatResult =
+  | {
+      status: "missing";
+      generation: "missing";
+    }
+  | {
+      status: "oversized";
+      generation: string;
+    }
+  | {
+      status: "data";
+      generation: string;
+    };
+
 export interface SubagentRunStoreStorage {
   cleanup(): Promise<boolean>;
+  stat?(): Promise<SubagentRunStoreStatResult>;
   read(): Promise<SubagentRunStoreReadResult>;
   write(expected: SubagentRunStoreGeneration, contents: string): Promise<string>;
   syncDirectory(): Promise<void>;
   close(): Promise<void>;
 }
 
+export type SubagentRunStoreStorageErrorFailure =
+  | "destination_changed"
+  | "invalid_mode"
+  | "io_failed"
+  | "invalid_input";
+
 export class SubagentRunStoreStorageError extends Error {
   readonly name = "SubagentRunStoreStorageError";
 
-  constructor(readonly failure: "destination_changed" | "io_failed" | "invalid_input") {
+  constructor(readonly failure: SubagentRunStoreStorageErrorFailure) {
     super(
-      failure === "destination_changed"
+      failure === "destination_changed" || failure === "invalid_mode"
         ? "Subagent run storage changed and was preserved."
         : "Subagent run storage is unavailable.",
     );
@@ -219,6 +240,7 @@ class NativeSubagentRunStoreStorage implements SubagentRunStoreStorage {
       const failure = response.slice(6);
       if (
         failure === "destination_changed" ||
+        failure === "invalid_mode" ||
         failure === "io_failed" ||
         failure === "invalid_input"
       ) {
@@ -234,6 +256,26 @@ class NativeSubagentRunStoreStorage implements SubagentRunStoreStorage {
     if (response === "ok 0") return false;
     if (response === "ok 1") return true;
     throw new SubagentRunStoreStorageError("io_failed");
+  }
+
+  async stat(): Promise<SubagentRunStoreStatResult> {
+    const response = await this.request("stat");
+    if (response === "missing") {
+      return { status: "missing", generation: "missing" };
+    }
+    if (response.startsWith("oversize ")) {
+      const generation = response.slice(9);
+      if (!isSubagentRunStoreGeneration(generation)) throw new SubagentRunStoreStorageError("io_failed");
+      return { status: "oversized", generation };
+    }
+    const match = /^stat (\S+)$/u.exec(response);
+    if (!match || !isSubagentRunStoreGeneration(match[1])) {
+      throw new SubagentRunStoreStorageError("io_failed");
+    }
+    return {
+      status: "data",
+      generation: match[1],
+    };
   }
 
   async read(): Promise<SubagentRunStoreReadResult> {

@@ -1006,6 +1006,31 @@ export function adaptSubagentRunSnapshotV1ToV2(
   });
 }
 
+const TRUSTED_SUBAGENT_RUN_SNAPSHOT_LISTS = new WeakSet<readonly SubagentRunSnapshot[]>();
+
+/**
+ * Mark a freshly cloned array of validated snapshots returned by a trusted
+ * store read so immediate consumers can skip redundant schema re-parsing.
+ */
+export function markTrustedSubagentRunSnapshotList<T extends SubagentRunSnapshot>(
+  snapshots: T[],
+): T[] {
+  TRUSTED_SUBAGENT_RUN_SNAPSHOT_LISTS.add(snapshots);
+  return snapshots;
+}
+
+/**
+ * Consume a single-use trust token for a freshly cloned store projection list.
+ * Re-reads or caller-constructed arrays are never trusted without validation.
+ */
+export function consumeTrustedSubagentRunSnapshotList(
+  snapshots: readonly unknown[],
+): boolean {
+  return TRUSTED_SUBAGENT_RUN_SNAPSHOT_LISTS.delete(
+    snapshots as readonly SubagentRunSnapshot[],
+  );
+}
+
 export function adaptSubagentRunSnapshotV2ToV1(
   snapshot: SubagentRunSnapshotV2,
 ): SubagentRunSnapshotV1 | undefined {

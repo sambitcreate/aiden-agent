@@ -461,3 +461,91 @@ test("late join refuses a run tracked for another chat, workspace or generation,
   await assert.rejects(reading, /renderer document is no longer active/u);
   assert.equal(closing.removed(), true);
 });
+
+test("combined snapshot and effect lookup reads the run store once for persisted and mid-turn detail", async () => {
+  const effect = {
+    version: 1 as const,
+    kind: "mcp_mutation" as const,
+    state: "unknown" as const,
+    label: "Tool outcome unknown. Check the destination before retrying.",
+    updatedAt: 5,
+  };
+  let combinedCalls = 0;
+  let separateSnapshotCalls = 0;
+  let separateEffectCalls = 0;
+
+  const detail = await readSubagentHistoryDetailForOwner(fakeOwner().owner, "chat-1", "run-1", {
+    getChat: async () => chat,
+    getSnapshot: async () => {
+      separateSnapshotCalls += 1;
+      return snapshot();
+    },
+    getEffectActivity: async () => {
+      separateEffectCalls += 1;
+      return [effect];
+    },
+    getSnapshotWithEffects: async (runId, chatId) => {
+      combinedCalls += 1;
+      assert.equal(runId, "run-1");
+      assert.equal(chatId, "chat-1");
+      return { snapshot: snapshot(), effects: [effect] };
+    },
+  });
+  assert.equal(combinedCalls, 1);
+  assert.equal(separateSnapshotCalls, 0);
+  assert.equal(separateEffectCalls, 0);
+  assert.deepEqual(detail, { version: 1, snapshot: snapshot(), effects: [effect] });
+
+  // Mid-turn tracked runs also execute a single combined store lookup.
+  const midTurnChat = { ...chat, messages: [{ role: "user" }] };
+  const midTurn = await readSubagentHistoryDetailForOwner(fakeOwner().owner, "chat-1", "run-1", {
+    getChat: async () => midTurnChat,
+    getSnapshot: async () => {
+      separateSnapshotCalls += 1;
+      return snapshot();
+    },
+    getEffectActivity: async () => {
+      separateEffectCalls += 1;
+      return [effect];
+    },
+    getSnapshotWithEffects: async () => {
+      combinedCalls += 1;
+      return { snapshot: { ...snapshot(), state: "running", finishedAt: undefined }, effects: [effect] };
+    },
+    getTrackedRun: () => ({
+      chatId: "chat-1",
+      workspaceId: "workspace-1",
+      generationId: "generation-1",
+    }),
+  });
+  assert.equal(combinedCalls, 2);
+  assert.equal(separateSnapshotCalls, 0);
+  assert.equal(separateEffectCalls, 0);
+  assert.equal(midTurn?.snapshot.state, "running");
+  assert.deepEqual(midTurn?.effects, [effect]);
+
+  // Mismatched workspace or chat in combined result fails closed and never exposes effects.
+  const wrongWorkspace = await readSubagentHistoryDetailForOwner(fakeOwner().owner, "chat-1", "run-1", {
+    getChat: async () => chat,
+    getSnapshot: async () => snapshot(),
+    getSnapshotWithEffects: async () => ({
+      snapshot: { ...snapshot(), workspaceId: "workspace-other" },
+      effects: [effect],
+    }),
+  });
+  assert.equal(wrongWorkspace, null);
+
+  // Navigation during the combined read aborts cleanly.
+  const closing = fakeOwner();
+  const pendingCombined = deferred<{ snapshot: SubagentRunSnapshotV1; effects: [] }>();
+  const aborted = readSubagentHistoryDetailForOwner(closing.owner, "chat-1", "run-1", {
+    getChat: async () => chat,
+    getSnapshot: async () => snapshot(),
+    getSnapshotWithEffects: () => pendingCombined.promise,
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  closing.invalidate();
+  pendingCombined.resolve({ snapshot: snapshot(), effects: [] });
+  await assert.rejects(aborted, /renderer document is no longer active/u);
+  assert.equal(closing.removed(), true);
+});

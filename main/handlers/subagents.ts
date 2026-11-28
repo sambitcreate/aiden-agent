@@ -30,9 +30,8 @@ export function registerSubagentHandlers(): void {
     try {
       return await readSubagentHistoryDetailForOwner(owner, chatId, runId, {
         getChat: (id) => chatStore.get(id),
-        getSnapshot: (id) => subagentRunStore.get(id),
-        getEffectActivity: (id, owningChatId) =>
-          subagentRunStore.listEffectActivityForRun(id, owningChatId),
+        getSnapshotWithEffects: (id, owningChatId) =>
+          subagentRunStore.getWithEffectActivity(id, owningChatId),
         getTranscript: (id, owningChatId) => subagentTranscriptStore.read(owningChatId, id),
         // A helper still running, or one that finished while its turn runs on,
         // so a reloaded or second window can catch up before the turn ends.

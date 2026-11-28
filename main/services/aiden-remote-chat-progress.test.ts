@@ -3,9 +3,11 @@ import { EventEmitter, once } from "node:events";
 import http, { type ServerResponse } from "node:http";
 import net, { type AddressInfo } from "node:net";
 import test from "node:test";
-import type {
-  SubagentRunSnapshotV1,
-  SubagentRunSnapshotV2,
+import {
+  markTrustedSubagentRunSnapshotList,
+  type SubagentRunSnapshot,
+  type SubagentRunSnapshotV1,
+  type SubagentRunSnapshotV2,
 } from "../../renderer/shared/subagent-runs.js";
 import type { TodoSnapshotViewV1 } from "../../renderer/shared/todo.js";
 import { boundedUnicodePrefix } from "../../renderer/shared/unicode-prefix.js";
@@ -868,4 +870,63 @@ test("Bot progress remains live with an unrelated controls grant", { timeout: 40
   assert.match(agents, /Updated reviewer/u);
   assert.equal(response.ended, false);
   assert.doesNotMatch(response.chunks.join(""), /app_controls_changed/u);
+});
+
+test("trusted store projections skip redundant snapshot re-parsing once while enforcing chat ownership and untrusted validation", async () => {
+  const controllable = liveV2Run();
+  const stops: Array<{ chatId: string; runId: string }> = [];
+  const reusableProjection: SubagentRunSnapshot[] = markTrustedSubagentRunSnapshotList([
+    structuredClone(controllable),
+  ]);
+  let reads = 0;
+  const { service, events } = fixture({
+    authorize: async (_deviceId, chatId) => ({ id: chatId, latestGenerationId: "generation-live" }),
+    readAgents: async () => {
+      reads += 1;
+      if (reads === 1) return reusableProjection;
+      if (reads === 2) {
+        return markTrustedSubagentRunSnapshotList([
+          structuredClone(controllable),
+        ]);
+      }
+      if (reads === 3) {
+        return markTrustedSubagentRunSnapshotList([
+          liveV2Run({ state: "stopped", revision: 3, updatedAt: 30, finishedAt: 30 }),
+        ]);
+      }
+      // Reusing an already-consumed array with an invalid field must re-run full validation and fail.
+      (reusableProjection[0] as unknown as { state: string }).state = "not-a-valid-state";
+      return reusableProjection;
+    },
+    stopAgent: async (target) => {
+      stops.push(target);
+      return true;
+    },
+  });
+  events.begin("chat-1", "generation-live");
+
+  const initial = await service.agentRoster("device-1", "chat-1");
+  assert.equal(initial.agents.length, 1);
+  assert.equal(initial.agents[0]?.state, "running");
+
+  const interrupted = await service.interruptAgent(
+    "device-1",
+    "chat-1",
+    initial.agents[0]!.agentId,
+  );
+  assert.deepEqual(stops, [{ chatId: "chat-1", runId: "private-live-run" }]);
+  assert.equal(interrupted.agents[0]?.state, "stopped");
+
+  const unvalidatedReuse = await service.agentRoster("device-1", "chat-1");
+  assert.equal(unvalidatedReuse.availability, "unavailable");
+  assert.deepEqual(unvalidatedReuse.agents, []);
+
+  // Even a trusted list must still reject snapshots belonging to a different chatId.
+  const mismatched = fixture({
+    readAgents: async () =>
+      markTrustedSubagentRunSnapshotList([{ ...structuredClone(run), chatId: "chat-other" }]),
+  });
+  const mismatchedRoster = await mismatched.service.agentRoster("device-1", "chat-1");
+  assert.equal(mismatchedRoster.availability, "unavailable");
+  assert.deepEqual(mismatchedRoster.agents, []);
 });

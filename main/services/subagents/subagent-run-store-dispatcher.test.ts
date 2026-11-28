@@ -59,6 +59,11 @@ function stores(log: string[], overrides: { v1Get?: () => Promise<SubagentRunSna
     async initialize() { log.push("v1.initialize"); },
     async upsert(snapshot: unknown) { log.push("v1.upsert"); return snapshot as SubagentRunSnapshotV1; },
     async get() { log.push("v1.get"); return overrides.v1Get ? overrides.v1Get() : v1(); },
+    async getWithEffectActivity() {
+      log.push("v1.getWithEffectActivity");
+      const snapshot = overrides.v1Get ? await overrides.v1Get() : v1();
+      return snapshot ? { snapshot, effects: [] } : null;
+    },
     async listByChat() { log.push("v1.list"); return [v1()]; },
     async deleteChat() { log.push("v1.delete"); },
     async pendingChatDeletions() { log.push("v1.pending"); return ["chat-v1"]; },
@@ -70,6 +75,22 @@ function stores(log: string[], overrides: { v1Get?: () => Promise<SubagentRunSna
     async initialize() { log.push("v2.initialize"); },
     async upsert(snapshot: unknown) { log.push("v2.upsert"); return snapshot as SubagentRunSnapshotV2; },
     async get() { log.push("v2.get"); return overrides.v2Get ? overrides.v2Get() : v2(); },
+    async getWithEffectActivity() {
+      log.push("v2.getWithEffectActivity");
+      const snapshot = overrides.v2Get ? await overrides.v2Get() : v2();
+      return snapshot
+        ? {
+            snapshot,
+            effects: [{
+              version: 1 as const,
+              kind: "mcp_mutation" as const,
+              state: "unknown" as const,
+              label: "Tool outcome unknown.",
+              updatedAt: 3,
+            }],
+          }
+        : null;
+    },
     async listByChat() { log.push("v2.list"); return [v2()]; },
     async preflightChatDeletion() { log.push("v2.preflight-delete"); await overrides.v2PreflightDelete?.(); },
     async deleteChat() { log.push("v2.delete"); await overrides.v2Delete?.(); },
@@ -204,4 +225,37 @@ test("V2 active-effect preflight leaves both stores untouched", async () => {
   await dispatcher.initialize();
   await assert.rejects(dispatcher.deleteChat("chat-1"), failure);
   assert.deepEqual(log, ["v2.prepare", "v2.initialize", "v2.preflight-delete"]);
+});
+
+test("dispatcher getWithEffectActivity performs a single store read and honors V1/V2 projection", async () => {
+  const log: string[] = [];
+  const attention = v2("needs_attention");
+  const { v1Store, v2Store } = stores(log, { v2Get: async () => attention });
+  const v2Dispatcher = createSubagentRunStoreDispatcher({
+    selection: "v2",
+    projection: "v1",
+    v1: v1Store as never,
+    v2: v2Store as never,
+    prepareV2: async () => { log.push("v2.prepare"); },
+    checkpointV1Mutation: async () => { log.push("v2.checkpoint"); },
+  });
+  await v2Dispatcher.initialize();
+  const detail = await v2Dispatcher.getWithEffectActivity("run-1", "chat-1");
+  assert.equal(detail?.snapshot.version, 1);
+  assert.equal(detail?.snapshot.state, "running");
+  assert.equal(detail?.effects.length, 1);
+  assert.deepEqual(log, ["v2.prepare", "v2.initialize", "v2.getWithEffectActivity"]);
+
+  const v1Log: string[] = [];
+  const v1Mocks = stores(v1Log);
+  const v1Dispatcher = createSubagentRunStoreDispatcher({
+    selection: "v1",
+    v1: v1Mocks.v1Store as never,
+    v2: v1Mocks.v2Store as never,
+  });
+  await v1Dispatcher.initialize();
+  const v1Detail = await v1Dispatcher.getWithEffectActivity("run-1", "chat-1");
+  assert.equal(v1Detail?.snapshot.version, 1);
+  assert.deepEqual(v1Detail?.effects, []);
+  assert.deepEqual(v1Log, ["v1.initialize", "v1.getWithEffectActivity"]);
 });

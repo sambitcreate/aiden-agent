@@ -113,11 +113,25 @@ export interface SubagentAuthorityV2 {
   readonly expiresAt: number;
 }
 
-export function subagentAuthorityDigestV2(authority: SubagentAuthorityV2): string {
+const FROZEN_AUTHORITY_DIGESTS = new WeakMap<SubagentAuthorityV2, string>();
+const IMMUTABLE_AUTHORITIES = new WeakSet<SubagentAuthorityV2>();
+
+function computeSubagentAuthorityDigestV2(authority: SubagentAuthorityV2): string {
   return createHash("sha256")
     .update("aiden-subagent-authority-v2\0", "utf8")
     .update(JSON.stringify(authority), "utf8")
     .digest("hex");
+}
+
+export function subagentAuthorityDigestV2(authority: SubagentAuthorityV2): string {
+  if (!IMMUTABLE_AUTHORITIES.has(authority)) {
+    return computeSubagentAuthorityDigestV2(authority);
+  }
+  const cached = FROZEN_AUTHORITY_DIGESTS.get(authority);
+  if (cached !== undefined) return cached;
+  const digest = computeSubagentAuthorityDigestV2(authority);
+  FROZEN_AUTHORITY_DIGESTS.set(authority, digest);
+  return digest;
 }
 
 export interface ResolveSubagentCapabilitiesV2Input {
@@ -607,7 +621,9 @@ export function createSubagentAuthorityV2(
     budgets: Object.freeze(budgets),
     expiresAt: input.expiresAt,
   };
-  return Object.freeze(authority);
+  const frozen = Object.freeze(authority);
+  IMMUTABLE_AUTHORITIES.add(frozen);
+  return frozen;
 }
 
 export function assertSubagentLaunchRolloutV2(
