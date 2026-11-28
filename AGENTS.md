@@ -78,7 +78,7 @@ The headless Aiden server lives in `packages/cli` as a self-contained npm packag
 
 - Never wait on CI or PR comments inside your own turn: no `sleep` loops around `gh`, `gh run watch`, `gh pr checks --watch` or repeated status glances. After pushing, turn on auto-merge if asked, hand the wait to a watcher (pr-watchd, the Claude app's Auto-fix or Aiden's `follow_pull_request`), and end the turn. Follow the `aiden-pr-ci` skill in `.agents/skills/` for the details and for what to do when woken about a failure.
 - Update a shared PR branch by merging `origin/main` into it. Do not rebase or force-push a branch that already has a PR, reviews, or CI history.
-- Before requesting bot reviews or waiting on hosted CI, run the narrow suites for the touched surfaces locally. Hosted CI and review bots should not be the first place a failure shows up.
+- Before requesting bot reviews or waiting on hosted CI, run the narrow suites for the touched surfaces locally (including `npm run test:ci-policy` when touching `.github/workflows/`, CI scripts, test registration, or E2E specs). Hosted CI and review bots should not be the first place a failure shows up.
 - Treat a PR as mergeable only when CI is green on its exact head commit. After merging `main` in, wait for the new run; do not merge on an earlier head's result.
 - Do not cancel CI runs on `main` by hand. CI's concurrency group already supersedes an older main run when a newer merge lands. The completed run on the newest main commit is the baseline releases are judged by; if that commit's CI was cancelled, start CI on it again.
 - Flaky tests: a failure that passes on rerun is still a bug. Rerun failed jobs at most once, then record the spec, the symptom, and the run link in the PR description. Do not paper over it by raising timeouts, adding retries, or weakening `--fail-on-flaky-tests`.
@@ -90,7 +90,7 @@ The headless Aiden server lives in `packages/cli` as a self-contained npm packag
 
 ## Tests
 
-When adding a feature or changing behavior, layout, configuration, or contracts, always check whether existing tests need updating and add or extend tests when coverage is missing. Run the relevant suites before finishing (`npm run test`, or the narrower scripts in `package.json` when the change is scoped). If a new test file is added, register it in the appropriate `package.json` test script so CI picks it up.
+When adding a feature or changing behavior, layout, configuration, or contracts, always check whether existing tests need updating and add or extend tests when coverage is missing. Run the relevant suites before finishing (`npm run test`, or the narrower scripts in `package.json` when the change is scoped). If a new test file is added, register it in the appropriate `package.json` test script and `scripts/ci-test-registry.json` so CI picks it up; when adding or removing a deterministic E2E spec under `tests/e2e/`, update both `scripts/ci-e2e-spec-map.json` and `FILE_SECONDS` in `scripts/ci-e2e-shards.mjs`, and verify with `npm run test:ci-policy` (`e2e-spec-timings` shares cached Playwright medians across macOS and Linux via `enableCrossOsArchive: true`, and `FILE_SECONDS` backs cold-cache shard balancing).
 
 "Contracts" means behavioral or API contracts: function outputs, IPC register-and-invoke, and rendered UI (including Playwright). It does not mean grepping production source text.
 

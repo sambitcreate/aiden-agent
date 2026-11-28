@@ -150,9 +150,11 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: test-results/e2e-spec-timings.json
-          key: e2e-spec-timings-v1-${{ github.sha }}
+          key: e2e-spec-timings-v1-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
+            e2e-spec-timings-v1-${{ github.sha }}-
             e2e-spec-timings-v1-
+          enableCrossOsArchive: true
       - name: Download test selection
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
@@ -943,9 +945,11 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: test-results/e2e-spec-timings.json
-          key: e2e-spec-timings-v1-${{ github.sha }}
+          key: e2e-spec-timings-v1-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
+            e2e-spec-timings-v1-${{ github.sha }}-
             e2e-spec-timings-v1-
+          enableCrossOsArchive: true
       - name: Download test selection
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
@@ -1036,9 +1040,11 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: test-results/e2e-spec-timings.json
-          key: e2e-spec-timings-v1-${{ github.sha }}
+          key: e2e-spec-timings-v1-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
+            e2e-spec-timings-v1-${{ github.sha }}-
             e2e-spec-timings-v1-
+          enableCrossOsArchive: true
       - name: Download shard timing artifacts
         continue-on-error: true
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
@@ -1053,7 +1059,8 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: test-results/e2e-spec-timings.json
-          key: e2e-spec-timings-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          key: e2e-spec-timings-v1-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          enableCrossOsArchive: true
 
   linux-rpm:
     name: Linux x64 · Fedora RPM

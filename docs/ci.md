@@ -105,14 +105,26 @@ cancelling CI never cancels a release. Runner capacity can still cause queueing.
   five isolated macOS runners with one worker each and
   `--fail-on-flaky-tests`, retaining the 20-minute job limit. File-duration weights
   prefer the median of recent hosted Playwright JSON timings (Actions cache plus
-  per-shard artifacts, merged on `main` only; CI never pushes timing files).
-  Missing or unreadable stores fall back to the conservative `FILE_SECONDS` table
-  from hosted runs 41784199399 and 41789418295, then to 30s for a brand-new spec.
+  per-shard artifacts, merged per platform into `platforms.darwin` and
+  `platforms.linux` on `main` only; CI never pushes timing files). The `ubuntu-24.04`
+  `e2e-spec-timings` job saves `test-results/e2e-spec-timings.json` with
+  `enableCrossOsArchive: true` under
+  `e2e-spec-timings-v1-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}`,
+  and `e2e` (`macos-26`), `linux-e2e` (`ubuntu-24.04`), and `e2e-spec-timings`
+  restore with `enableCrossOsArchive: true` and `restore-keys`
+  `e2e-spec-timings-v1-${{ github.sha }}-` then `e2e-spec-timings-v1-`, so macOS
+  and Linux runners share one archive scope and reruns match commit timings before
+  older `main` archives. Missing or unreadable stores fall back to the conservative
+  `FILE_SECONDS` table covering every runnable spec (seeded from hosted runs
+  41784199399 and 41789418295 plus conservative estimates for newer specs), then to
+  30s for synthetic or unrecorded paths.
   Cancelled terminal windows are lower bounds, never treated as completed timings.
   The completed run 41778188548 independently checks the allocation. A measured
   budget check reserves two minutes for setup/cleanup and at least three minutes
-  of headroom; real runner variation can still differ. Newly discovered specs get
-  a default weight and always run. A real Playwright collection check verifies
+  of headroom; real runner variation can still differ. `npm run test:ci-policy`
+  verifies cross-OS cache settings, complete `FILE_SECONDS` coverage, and cold-cache
+  shard headroom; newly discovered specs still get a default weight at runtime and
+  always run. A real Playwright collection check verifies
   that every deterministic case belongs to exactly one shard. Live-provider specs
   remain opt-in; production diagnostics run separately with the production profile.
   Pull requests may run a subset of specs (see below); unused shards still start
@@ -150,11 +162,12 @@ in `scripts/ci-e2e-spec-map.json`. Pushes to `main`, merge-group runs, releases,
 and `workflow_dispatch` keep the full suites. Selection also falls back to the
 full suite when a changed path is unmapped, or when shared config, fixtures,
 `package.json`, lockfiles, CI files, or test infra change. Empty unit lanes skip
-their `tsx --test` invocation but still start. When you add a deterministic
-E2E spec, add it to `scripts/ci-e2e-spec-map.json` with the `renderer/` and
-`main/` prefixes it covers; CI policy fails if a runnable spec is missing, if
-an entry names a spec that no longer exists, or if a listed prefix matches no
-file on disk. Shared harness files belong in the map's `full` list so they keep
+their `tsx --test` invocation but still start. When you add or remove a deterministic
+E2E spec, update `scripts/ci-e2e-spec-map.json` (with the `renderer/` and
+`main/` prefixes it covers) and `FILE_SECONDS` in `scripts/ci-e2e-shards.mjs`,
+then run `npm run test:ci-policy`; CI policy fails if a runnable spec is missing
+from either table, if an entry names a spec that no longer exists, or if a listed
+prefix matches no file on disk. Shared harness files belong in the map's `full` list so they keep
 every spec. Prefixes are exact paths, directories (`settings/`), or stems that
 continue with `/`, `.`, or `-` (`chat-fork` matches `chat-fork-service.ts`).
 Changing a spec file itself selects that spec. A failed-job rerun downloads the
