@@ -7,8 +7,8 @@
   - Vite emits `sourcemap: "hidden"`.
   - Production esbuild (`build:electron:production`, which `npm run build` uses) writes
     external maps with no `sourceMappingURL`.
-  - The release workflow uploads the maps as the `symbols-macos-<run_id>` artifact,
-    kept for 90 days. That name must not match the publish job's `release-*` pattern.
+  - After the signed packaged acceptance checks pass, the release workflow uploads the maps as
+    the `symbols-macos-<run_id>-<run_attempt>` artifact, kept for 90 days.
   - To symbolicate a stack, use `node:module` `SourceMap.findEntry` against those maps.
 - **Production main and preload output:** `minifyWhitespace` + `minifySyntax` only.
   Never enable identifier minification there; serialized functions and stack names rely on

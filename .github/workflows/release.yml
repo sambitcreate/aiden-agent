@@ -26,6 +26,8 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 120
     environment: release
+    outputs:
+      artifact-name: ${{ steps.artifact.outputs.name }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
@@ -160,20 +162,6 @@ jobs:
           AIDEN_POSTHOG_PROJECT_KEY: ${{ secrets.AIDEN_POSTHOG_PROJECT_KEY }}
         run: grep -qF "$AIDEN_POSTHOG_PROJECT_KEY" build/main/index.js || { echo "::error::The built main bundle does not carry the analytics project key."; exit 1; }
 
-      # Source maps are excluded from app.asar; keep them for symbolication.
-      # The name must not match the publish job's release-* download pattern.
-      - name: Keep source maps for crash symbolication
-        if: ${{ steps.version.outputs.publish == 'true' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: symbols-macos-${{ github.run_id }}
-          path: |
-            build/main/*.map
-            build/preload/*.map
-            build/renderer/**/*.map
-          if-no-files-found: error
-          retention-days: 90
-
       - name: Verify reboot-safe subagent migration in the signed app
         if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run test:subagents:migration:packaged
@@ -182,12 +170,34 @@ jobs:
         if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run test:e2e:diagnostics:packaged
 
+      # Source maps are excluded from app.asar; archive them after packaged checks pass.
+      - name: Keep source maps for crash symbolication
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: symbols-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/main/*.map
+            build/preload/*.map
+            build/renderer/**/*.map
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Record verified macOS release artifact
+        id: artifact
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        shell: bash
+        run: echo "name=release-macos-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+
       - name: Stage verified macOS release assets
         if: ${{ steps.version.outputs.publish == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: release-macos
-          path: release/distribution
+          name: ${{ steps.artifact.outputs.name }}
+          path: |
+            release/distribution/*.dmg
+            release/distribution/*.zip
+            release/distribution/latest-mac.yml
           if-no-files-found: error
           retention-days: 2
 
@@ -324,7 +334,7 @@ jobs:
         if: ${{ steps.version.outputs.publish == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: release-linux-${{ matrix.arch }}
+          name: release-linux-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             release/linux-distribution/*.AppImage
             release/linux-distribution/*.deb
@@ -354,6 +364,8 @@ jobs:
       - name: Resolve release identity
         id: version
         shell: bash
+        env:
+          MACOS_ARTIFACT: ${{ needs.release.outputs.artifact-name }}
         run: |
           set -euo pipefail
           base_version="$(node -p "require('./package.json').version")"
@@ -366,17 +378,76 @@ jobs:
           release_version="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).version)' "$selection")"
           release_tag="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).tag)' "$selection")"
           should_publish="$(node -e 'process.stdout.write(String(JSON.parse(process.argv[1]).publish))' "$selection")"
+          if [[ "$should_publish" == true && ! "$MACOS_ARTIFACT" =~ ^release-macos-[1-9][0-9]*-[1-9][0-9]*$ ]]; then
+            echo "::error::Expected verified macOS artifact output from release job, got '${MACOS_ARTIFACT}'." >&2
+            exit 1
+          fi
           echo "version=$release_version" >> "$GITHUB_OUTPUT"
           echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
           echo "publish=$should_publish" >> "$GITHUB_OUTPUT"
 
-      - name: Download verified desktop assets
+      - name: Download verified macOS release assets
         if: ${{ steps.version.outputs.publish == 'true' }}
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
         with:
-          pattern: release-*
+          name: ${{ needs.release.outputs.artifact-name }}
           path: release/distribution
-          merge-multiple: true
+
+      - name: Download verified Linux release assets
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          pattern: release-linux-*-${{ github.run_id }}-*
+          path: ${{ runner.temp }}/release-linux
+          merge-multiple: false
+
+      - name: Stage newest verified Linux release assets
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          if [[ ! "${GITHUB_RUN_ID:-}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Invalid GITHUB_RUN_ID '${GITHUB_RUN_ID:-}'." >&2
+            exit 1
+          fi
+          mkdir -p release/distribution
+          for arch in x64 arm64; do
+            expected_prefix="release-linux-${arch}-${GITHUB_RUN_ID}-"
+            best_attempt=0
+            best_dir=""
+            for candidate in "$RUNNER_TEMP/release-linux/${expected_prefix}"*; do
+              [[ -d "$candidate" && ! -L "$candidate" ]] || continue
+              name="$(basename "$candidate")"
+              attempt="${name#$expected_prefix}"
+              [[ "$attempt" =~ ^[1-9][0-9]*$ ]] || continue
+              if (( attempt > best_attempt )); then
+                best_attempt="$attempt"
+                best_dir="$candidate"
+              fi
+            done
+            if [[ -z "$best_dir" ]]; then
+              echo "::error::Missing verified Linux ${arch} release artifact for run ${GITHUB_RUN_ID}." >&2
+              exit 1
+            fi
+            files=( "$best_dir"/* )
+            if [[ "${#files[@]}" -eq 0 ]]; then
+              echo "::error::Verified Linux ${arch} release artifact $(basename "$best_dir") is empty." >&2
+              exit 1
+            fi
+            for asset in "${files[@]}"; do
+              if [[ ! -f "$asset" || -L "$asset" ]]; then
+                echo "::error::Unexpected non-regular Linux release entry: $asset" >&2
+                exit 1
+              fi
+              target="release/distribution/$(basename "$asset")"
+              if [[ -e "$target" || -L "$target" ]]; then
+                echo "::error::Duplicate staged release asset: $(basename "$target")" >&2
+                exit 1
+              fi
+              cp -- "$asset" "$target"
+            done
+          done
 
       - name: Publish verified release assets
         if: ${{ steps.version.outputs.publish == 'true' }}

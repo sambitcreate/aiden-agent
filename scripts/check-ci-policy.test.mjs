@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { readdir, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { URL } from "node:url";
 import { parse } from "yaml";
@@ -10,8 +12,11 @@ import { AREA_NAMES } from "./ci-changes.mjs";
 import { PLAN_DECISIONS, REQUIRED_JOB_RULES } from "./ci-required.mjs";
 import { readRegistry } from "./ci-test-registry.mjs";
 
+const workflowsDirUrl = new URL("../.github/workflows/", import.meta.url);
 const workflowUrl = new URL("../.github/workflows/ci.yml", import.meta.url);
 const releaseWorkflowUrl = new URL("../.github/workflows/release.yml", import.meta.url);
+const linuxInstallersWorkflowUrl = new URL("../.github/workflows/linux-installers.yml", import.meta.url);
+const serverBundleWorkflowUrl = new URL("../.github/workflows/server-bundle.yml", import.meta.url);
 const pullfrogWorkflowUrl = new URL(
   "../.github/workflows/pullfrog.yml",
   import.meta.url,
@@ -325,6 +330,407 @@ test("every release build and publisher requires main even on manual dispatch", 
   const { jobs } = parse(await readFile(releaseWorkflowUrl, "utf8"));
   const required = "${{ vars.RELEASES_ENABLED == 'true' && github.ref == 'refs/heads/main' }}";
   for (const name of ["release", "linux-release", "publish"]) assert.equal(jobs[name].if, required);
+});
+
+const PINNED_UPLOAD_ARTIFACT = "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02";
+const PINNED_DOWNLOAD_ARTIFACT = "actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e";
+
+function assertAttemptScopedUploads(workflowName, raw) {
+  const doc = parse(raw);
+  let uploadCount = 0;
+  for (const [jobName, job] of Object.entries(doc?.jobs ?? {})) {
+    const steps = job?.steps ?? [];
+    for (const [stepIndex, step] of steps.entries()) {
+      if (!String(step.uses ?? "").startsWith("actions/upload-artifact@")) continue;
+      uploadCount += 1;
+      const context = `${workflowName}:${jobName}:${step.name ?? stepIndex}`;
+      assert.equal(step.uses, PINNED_UPLOAD_ARTIFACT, `${context}: upload-artifact must stay SHA-pinned`);
+      assert.notEqual(step.with?.overwrite, true, `${context}: uploads must use immutable attempt-scoped names instead of overwrite`);
+      const artifactName = step.with?.name;
+      assert.equal(typeof artifactName, "string", `${context}: upload step must specify with.name`);
+      assert.ok(artifactName.trim().length > 0, `${context}: upload name must not be empty`);
+
+      const directAttemptScoped =
+        /\$\{\{\s*github\.run_id\s*\}\}/u.test(artifactName) &&
+        /\$\{\{\s*github\.run_attempt\s*\}\}/u.test(artifactName);
+      if (directAttemptScoped) continue;
+
+      const outputMatch = artifactName.match(/^\$\{\{\s*steps\.([A-Za-z0-9_-]+)\.outputs\.([A-Za-z0-9_-]+)\s*\}\}$/u);
+      assert.ok(
+        outputMatch,
+        `${context}: upload name '${artifactName}' must include github.run_id and github.run_attempt or bind a step output`,
+      );
+      const [, producerId, outputKey] = outputMatch;
+      const producer = steps.slice(0, stepIndex).find((candidate) => candidate.id === producerId);
+      assert.ok(producer, `${context}: producer step '${producerId}' must precede the upload step`);
+      const escapedKey = outputKey.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+      assert.match(
+        String(producer.run ?? ""),
+        new RegExp(
+          `${escapedKey}=[^\\n]*\\$\\{?GITHUB_RUN_ID\\}?[^\\n]*\\$\\{?GITHUB_RUN_ATTEMPT\\}?[^\\n]*>>\\s*"?\\$GITHUB_OUTPUT"?`,
+          "u",
+        ),
+        `${context}: step '${producerId}' output '${outputKey}' must embed GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT`,
+      );
+    }
+  }
+  return uploadCount;
+}
+
+test("every workflow upload is immutable and attempt-scoped across reruns and commits", async () => {
+  const workflowFiles = (await readdir(workflowsDirUrl))
+    .filter((name) => /\.ya?ml$/u.test(name))
+    .sort();
+  assert.ok(workflowFiles.length > 0, "expected workflow files in .github/workflows/");
+  let totalUploads = 0;
+  for (const name of workflowFiles) {
+    const raw = await readFile(new URL(name, workflowsDirUrl), "utf8");
+    totalUploads += assertAttemptScopedUploads(name, raw);
+  }
+  assert.ok(totalUploads >= 16, `expected all workflow upload steps to be checked, found ${totalUploads}`);
+
+  const [ciRaw, linuxInstallersRaw, serverBundleRaw] = await Promise.all([
+    readFile(workflowUrl, "utf8"),
+    readFile(linuxInstallersWorkflowUrl, "utf8"),
+    readFile(serverBundleWorkflowUrl, "utf8"),
+  ]);
+  const ciJobs = parse(ciRaw).jobs;
+  const androidUpload = ciJobs.android.steps.find((step) => step.name === "Upload installable debug APK");
+  assert.equal(
+    androidUpload?.with?.name,
+    "aiden-on-the-go-debug-apk-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
+  );
+  const installerUpload = parse(linuxInstallersRaw).jobs.build.steps.find(
+    (step) => step.name === "Upload verified Linux installers",
+  );
+  assert.equal(
+    installerUpload?.with?.name,
+    "aiden-linux-installers-${{ matrix.arch }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
+  );
+  const serverUpload = parse(serverBundleRaw).jobs.bundle.steps.find(
+    (step) => step.name === "Upload the server package",
+  );
+  assert.equal(
+    serverUpload?.with?.name,
+    "aiden-server-keyed-linux-x64-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
+  );
+
+  for (const [label, mutate] of [
+    [
+      "missing direct run_attempt",
+      (source) =>
+        source.replace(
+          "aiden-on-the-go-debug-apk-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
+          "aiden-on-the-go-debug-apk",
+        ),
+    ],
+    [
+      "missing producer output GITHUB_RUN_ATTEMPT",
+      (source) =>
+        source.replace(
+          "desktop-build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}",
+          "desktop-build-${GITHUB_RUN_ID}",
+        ),
+    ],
+    [
+      "mutable overwrite upload",
+      (source) =>
+        source.replace(
+          "name: ${{ steps.bundle.outputs.name }}",
+          "name: ${{ steps.bundle.outputs.name }}\n          overwrite: true",
+        ),
+    ],
+  ]) {
+    assert.throws(() => assertAttemptScopedUploads("ci.yml", mutate(ciRaw)), undefined, label);
+  }
+});
+
+function assertReleaseStagingAndPublishPolicy(raw) {
+  const { jobs } = parse(raw);
+  assert.ok(jobs.release && jobs["linux-release"] && jobs.publish);
+
+  const releaseSteps = jobs.release.steps;
+  const migrationIndex = releaseSteps.findIndex(
+    (step) => step.run === "npm run test:subagents:migration:packaged",
+  );
+  const diagnosticsIndex = releaseSteps.findIndex(
+    (step) => step.run === "npm run test:e2e:diagnostics:packaged",
+  );
+  const symbolsIndex = releaseSteps.findIndex(
+    (step) => step.name === "Keep source maps for crash symbolication",
+  );
+  const artifactRecordIndex = releaseSteps.findIndex((step) => step.id === "artifact");
+  const stageMacIndex = releaseSteps.findIndex(
+    (step) => step.name === "Stage verified macOS release assets",
+  );
+
+  assert.ok(migrationIndex >= 0 && diagnosticsIndex > migrationIndex, "packaged macOS checks must run in order");
+  assert.ok(
+    symbolsIndex > migrationIndex && symbolsIndex > diagnosticsIndex,
+    "crash symbols must upload only after signed packaged checks pass",
+  );
+  assert.equal(
+    releaseSteps[symbolsIndex]?.with?.name,
+    "symbols-macos-${{ github.run_id }}-${{ github.run_attempt }}",
+  );
+  assert.ok(
+    artifactRecordIndex > diagnosticsIndex && stageMacIndex > artifactRecordIndex,
+    "macOS artifact output must be recorded after packaged checks and before staging",
+  );
+  assert.match(
+    String(releaseSteps[artifactRecordIndex]?.run ?? ""),
+    /^echo "name=release-macos-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}" >> "\$GITHUB_OUTPUT"$/mu,
+  );
+  assert.equal(jobs.release.outputs?.["artifact-name"], "${{ steps.artifact.outputs.name }}");
+  assert.equal(releaseSteps[stageMacIndex]?.with?.name, "${{ steps.artifact.outputs.name }}");
+  const macStagedPaths = String(releaseSteps[stageMacIndex]?.with?.path ?? "")
+    .trim()
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  assert.deepEqual(macStagedPaths, [
+    "release/distribution/*.dmg",
+    "release/distribution/*.zip",
+    "release/distribution/latest-mac.yml",
+  ]);
+
+  const linuxStage = jobs["linux-release"].steps.find(
+    (step) => step.name === "Stage verified Linux release assets",
+  );
+  assert.equal(
+    linuxStage?.with?.name,
+    "release-linux-${{ matrix.arch }}-${{ github.run_id }}-${{ github.run_attempt }}",
+  );
+
+  const publishSteps = jobs.publish.steps;
+  assert.deepEqual([jobs.publish.needs].flat().toSorted(), ["linux-release", "release"]);
+  const downloads = publishSteps.filter((step) =>
+    String(step.uses ?? "").startsWith("actions/download-artifact@"),
+  );
+  assert.equal(downloads.length, 2, "jobs.publish must download macOS and Linux release artifacts separately");
+  for (const download of downloads) {
+    assert.equal(download.uses, PINNED_DOWNLOAD_ARTIFACT);
+    assert.equal(download.if, "${{ steps.version.outputs.publish == 'true' }}");
+    assert.notEqual(download.with?.pattern, "release-*");
+    assert.notEqual(download.with?.["merge-multiple"], true);
+    assert.equal(download["continue-on-error"], undefined);
+  }
+
+  const macDownloadIndex = publishSteps.findIndex(
+    (step) => step.name === "Download verified macOS release assets",
+  );
+  const linuxDownloadIndex = publishSteps.findIndex(
+    (step) => step.name === "Download verified Linux release assets",
+  );
+  const stageLinuxIndex = publishSteps.findIndex(
+    (step) => step.name === "Stage newest verified Linux release assets",
+  );
+  const publishReleaseIndex = publishSteps.findIndex(
+    (step) => step.name === "Publish verified release assets",
+  );
+  const resolveIdentityIndex = publishSteps.findIndex((step) => step.id === "version");
+
+  assert.ok(resolveIdentityIndex >= 0);
+  assert.equal(
+    publishSteps[resolveIdentityIndex]?.env?.MACOS_ARTIFACT,
+    "${{ needs.release.outputs.artifact-name }}",
+  );
+  assert.ok(macDownloadIndex > resolveIdentityIndex && macDownloadIndex < publishReleaseIndex);
+  assert.equal(
+    publishSteps[macDownloadIndex]?.with?.name,
+    "${{ needs.release.outputs.artifact-name }}",
+  );
+  assert.equal(publishSteps[macDownloadIndex]?.with?.path, "release/distribution");
+
+  assert.ok(linuxDownloadIndex > resolveIdentityIndex && stageLinuxIndex > linuxDownloadIndex);
+  assert.ok(publishReleaseIndex > stageLinuxIndex);
+  assert.equal(
+    publishSteps[linuxDownloadIndex]?.with?.pattern,
+    "release-linux-*-${{ github.run_id }}-*",
+  );
+  assert.equal(
+    publishSteps[linuxDownloadIndex]?.with?.path,
+    "${{ runner.temp }}/release-linux",
+  );
+  assert.equal(publishSteps[linuxDownloadIndex]?.with?.["merge-multiple"], false);
+  assert.equal(
+    publishSteps[stageLinuxIndex]?.if,
+    "${{ steps.version.outputs.publish == 'true' }}",
+  );
+}
+
+test("macOS and Linux release staging defer symbols, restrict globs, and pin publish downloads", async () => {
+  const workflow = await readFile(releaseWorkflowUrl, "utf8");
+  assertReleaseStagingAndPublishPolicy(workflow);
+
+  for (const [label, mutate] of [
+    [
+      "symbols uploaded before packaged checks",
+      (source) => {
+        const step = workflowStep(source, "Keep source maps for crash symbolication");
+        return source
+          .replace(step, "")
+          .replace(
+            "      - name: Verify reboot-safe subagent migration in the signed app",
+            `${step}      - name: Verify reboot-safe subagent migration in the signed app`,
+          );
+      },
+    ],
+    [
+      "whole release/distribution staged",
+      (source) =>
+        source.replace(
+          "          path: |\n            release/distribution/*.dmg\n            release/distribution/*.zip\n            release/distribution/latest-mac.yml",
+          "          path: release/distribution",
+        ),
+    ],
+    [
+      "blockmap included in macOS staging",
+      (source) =>
+        source.replace(
+          "            release/distribution/latest-mac.yml",
+          "            release/distribution/latest-mac.yml\n            release/distribution/*.blockmap",
+        ),
+    ],
+    [
+      "unpinned macOS download name",
+      (source) =>
+        source.replace(
+          "          name: ${{ needs.release.outputs.artifact-name }}",
+          "          name: release-macos-${{ github.run_id }}-${{ github.run_attempt }}",
+        ),
+    ],
+    [
+      "merged wildcard Linux download",
+      (source) =>
+        source.replace("          merge-multiple: false", "          merge-multiple: true"),
+    ],
+  ]) {
+    assert.throws(() => assertReleaseStagingAndPublishPolicy(mutate(workflow)), undefined, label);
+  }
+});
+
+test("publish Linux staging selects each architecture's highest attempt across partial and full reruns", async () => {
+  const { jobs } = parse(await readFile(releaseWorkflowUrl, "utf8"));
+  const stageStep = jobs.publish.steps.find(
+    (step) => step.name === "Stage newest verified Linux release assets",
+  );
+  assert.ok(stageStep?.run);
+
+  async function writeAttemptAssets(runnerTemp, arch, runId, attempt, tag) {
+    const dir = path.join(runnerTemp, "release-linux", `release-linux-${arch}-${runId}-${attempt}`);
+    await mkdir(dir, { recursive: true });
+    const appImageArch = arch === "x64" ? "x86_64" : "arm64";
+    const debArch = arch === "x64" ? "amd64" : "arm64";
+    const rpmArch = arch === "x64" ? "x86_64" : "aarch64";
+    const feedName = arch === "x64" ? "latest-linux.yml" : "latest-linux-arm64.yml";
+    await Promise.all([
+      writeFile(path.join(dir, `Aiden-Agent-0.70.0-${appImageArch}-linux.AppImage`), `appimage-${tag}`),
+      writeFile(path.join(dir, `Aiden-Agent-0.70.0-${debArch}-linux.deb`), `deb-${tag}`),
+      writeFile(path.join(dir, `Aiden-Agent-0.70.0-${rpmArch}-linux.rpm`), `rpm-${tag}`),
+      writeFile(path.join(dir, feedName), `feed-${tag}`),
+    ]);
+  }
+
+  function runStage(workspace, runnerTemp, runId = "424242") {
+    return spawnSync("bash", ["-c", stageStep.run], {
+      cwd: workspace,
+      env: {
+        ...process.env,
+        RUNNER_TEMP: runnerTemp,
+        GITHUB_RUN_ID: runId,
+      },
+      encoding: "utf8",
+    });
+  }
+
+  // 1. Partial rerun + multi-digit numeric attempt comparison (10 > 9 > 2) + foreign run_id ignored.
+  const partialRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-publish-stage-partial-"));
+  try {
+    const workspace = path.join(partialRoot, "workspace");
+    const runnerTemp = path.join(partialRoot, "runner-temp");
+    const dist = path.join(workspace, "release", "distribution");
+    await mkdir(dist, { recursive: true });
+    await Promise.all([
+      writeFile(path.join(dist, "Aiden-Agent-Beta-0.70.0-arm64.dmg"), "mac-dmg"),
+      writeFile(path.join(dist, "Aiden-Agent-0.70.0-arm64-mac.zip"), "mac-zip"),
+      writeFile(path.join(dist, "latest-mac.yml"), "mac-feed"),
+      writeAttemptAssets(runnerTemp, "x64", "424242", 1, "x64-a1"),
+      writeAttemptAssets(runnerTemp, "arm64", "424242", 2, "arm64-a2"),
+      writeAttemptAssets(runnerTemp, "arm64", "424242", 9, "arm64-a9"),
+      writeAttemptAssets(runnerTemp, "arm64", "424242", 10, "arm64-a10"),
+      writeAttemptAssets(runnerTemp, "x64", "999999", 50, "foreign-run"),
+    ]);
+    const result = runStage(workspace, runnerTemp, "424242");
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.equal(await readFile(path.join(dist, "Aiden-Agent-Beta-0.70.0-arm64.dmg"), "utf8"), "mac-dmg");
+    assert.equal(
+      await readFile(path.join(dist, "Aiden-Agent-0.70.0-x86_64-linux.AppImage"), "utf8"),
+      "appimage-x64-a1",
+    );
+    assert.equal(await readFile(path.join(dist, "latest-linux.yml"), "utf8"), "feed-x64-a1");
+    assert.equal(
+      await readFile(path.join(dist, "Aiden-Agent-0.70.0-arm64-linux.AppImage"), "utf8"),
+      "appimage-arm64-a10",
+    );
+    assert.equal(await readFile(path.join(dist, "latest-linux-arm64.yml"), "utf8"), "feed-arm64-a10");
+  } finally {
+    await rm(partialRoot, { recursive: true, force: true });
+  }
+
+  // 2. Full rerun: both architectures select attempt 2 over attempt 1.
+  const fullRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-publish-stage-full-"));
+  try {
+    const workspace = path.join(fullRoot, "workspace");
+    const runnerTemp = path.join(fullRoot, "runner-temp");
+    await mkdir(workspace, { recursive: true });
+    await Promise.all([
+      writeAttemptAssets(runnerTemp, "x64", "777", 1, "x64-a1"),
+      writeAttemptAssets(runnerTemp, "x64", "777", 2, "x64-a2"),
+      writeAttemptAssets(runnerTemp, "arm64", "777", 1, "arm64-a1"),
+      writeAttemptAssets(runnerTemp, "arm64", "777", 2, "arm64-a2"),
+    ]);
+    const result = runStage(workspace, runnerTemp, "777");
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const dist = path.join(workspace, "release", "distribution");
+    assert.equal(await readFile(path.join(dist, "Aiden-Agent-0.70.0-amd64-linux.deb"), "utf8"), "deb-x64-a2");
+    assert.equal(await readFile(path.join(dist, "Aiden-Agent-0.70.0-aarch64-linux.rpm"), "utf8"), "rpm-arm64-a2");
+  } finally {
+    await rm(fullRoot, { recursive: true, force: true });
+  }
+
+  // 3. Missing architecture, empty artifact directory, and duplicate staged assets fail closed.
+  const errorRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-publish-stage-errors-"));
+  try {
+    const missingWorkspace = path.join(errorRoot, "missing-ws");
+    const missingTemp = path.join(errorRoot, "missing-temp");
+    await mkdir(missingWorkspace, { recursive: true });
+    await writeAttemptAssets(missingTemp, "x64", "555", 1, "x64-only");
+    const missingResult = runStage(missingWorkspace, missingTemp, "555");
+    assert.notEqual(missingResult.status, 0);
+    assert.match(`${missingResult.stdout}${missingResult.stderr}`, /Missing verified Linux arm64 release artifact/u);
+
+    const emptyWorkspace = path.join(errorRoot, "empty-ws");
+    const emptyTemp = path.join(errorRoot, "empty-temp");
+    await mkdir(emptyWorkspace, { recursive: true });
+    await writeAttemptAssets(emptyTemp, "x64", "555", 1, "x64-ok");
+    await mkdir(path.join(emptyTemp, "release-linux", "release-linux-arm64-555-1"), { recursive: true });
+    const emptyResult = runStage(emptyWorkspace, emptyTemp, "555");
+    assert.notEqual(emptyResult.status, 0);
+    assert.match(`${emptyResult.stdout}${emptyResult.stderr}`, /is empty/u);
+
+    const dupWorkspace = path.join(errorRoot, "dup-ws");
+    const dupTemp = path.join(errorRoot, "dup-temp");
+    await mkdir(path.join(dupWorkspace, "release", "distribution"), { recursive: true });
+    await writeFile(path.join(dupWorkspace, "release", "distribution", "latest-linux.yml"), "preexisting");
+    await writeAttemptAssets(dupTemp, "x64", "555", 1, "x64-dup");
+    await writeAttemptAssets(dupTemp, "arm64", "555", 1, "arm64-dup");
+    const dupResult = runStage(dupWorkspace, dupTemp, "555");
+    assert.notEqual(dupResult.status, 0);
+    assert.match(`${dupResult.stdout}${dupResult.stderr}`, /Duplicate staged release asset: latest-linux\.yml/u);
+  } finally {
+    await rm(errorRoot, { recursive: true, force: true });
+  }
 });
 
 test("coverage collection is enabled before positional test paths", async () => {
