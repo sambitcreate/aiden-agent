@@ -1,6 +1,6 @@
 import { initializeSqliteReclamation, reclaimSqlitePages } from "./sqlite-reclamation.js";
 import { randomUUID } from "node:crypto";
-import { realpathSync } from "node:fs";
+import { chmodSync, realpathSync } from "node:fs";
 import { chmod, mkdir, open, stat } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
@@ -79,6 +79,8 @@ const MAX_ALWAYS_ON = 12;
 const MAX_SCOPE_FACTS = 2_000;
 const MAX_SCOPE_DOCUMENTS = 5_000;
 const MAX_CHAT_DOCUMENTS = 1_000;
+const MAX_PREPARED_CHAT_CACHES = 64;
+const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
 const SECRET_LIKE = /(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:api[_ -]?key|secret|password)\s*[:=]|\bbearer(?:\s*[:=]\s*|\s+)[A-Za-z0-9._~+/-]{12,}|\bsk-[A-Za-z0-9_-]{16,}|\bgh[pousr]_[A-Za-z0-9]{20,}|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|\bAIza[A-Za-z0-9_-]{20,}|\bxox[baprs]-[A-Za-z0-9-]{10,}|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|https?:\/\/[^\s/:@]+:[^\s@/]+@)/iu;
 const FORBIDDEN_MEMORY_CONTENT = /(?:\bcompaction summary\b|<\/?(?:compaction_?summary|thinking|analysis|tool_(?:call|result))\b|(?:^|\s)##\s*(?:goal|progress|critical context|context for suffix|original request)\b|\b(?:chain[- ]of[- ]thought|internal reasoning|retained tail)\b|\b(?:toolCallId|tool_result|tool payload)\b|\b(?:system prompt|AGENTS\.md|SKILL\.md)\b|\bignore (?:all|any|the|previous) instructions\b|\byou are now\b)/iu;
 
@@ -206,11 +208,48 @@ export class MemoryStore {
   private openGeneration = 0;
   /** Compiled queries per open handle; a closed handle takes its cache with it. */
   private readonly statements = new WeakMap<DatabaseSync, Map<string, StatementSync>>();
+  /** Pure per-document validation cache keyed by chat ID and document ID. */
+  private readonly preparedDocuments = new Map<
+    string,
+    Map<
+      string,
+      {
+        kind: "transcript" | "artifact";
+        sourceId: string;
+        rawText: string;
+        createdAt?: number;
+        item: {
+          id: string;
+          kind: "transcript" | "artifact";
+          text: string;
+          sourceId: string;
+          createdAt?: number;
+        } | null;
+      }
+    >
+  >();
+  /** Stored row mirror per scoped chat, invalidated whenever PRAGMA data_version changes. */
+  private cachedDataVersion?: number;
+  private readonly chatDocumentCache = new Map<
+    string,
+    Map<
+      string,
+      {
+        id: string;
+        kind: "transcript" | "artifact";
+        normalized_text: string;
+        source_id: string;
+        updated_at: number;
+      }
+    >
+  >();
 
   constructor(
     private readonly options: {
       root(): string | Promise<string>;
       now?: () => number;
+      /** SQLite lock wait cap in milliseconds; defaults to 5,000 ms for shared CLI stores. */
+      busyTimeoutMs?: number;
       /**
        * Legacy databases absorbed into this store. Each source scope is
        * copied once per (file fingerprint, source scope, destination scope)
@@ -258,12 +297,20 @@ export class MemoryStore {
     await handle.close();
     await chmod(file, 0o600);
     const database = new DatabaseSync(file);
+    const configuredBusyTimeout = this.options.busyTimeoutMs;
+    const busyTimeoutMs =
+      configuredBusyTimeout !== undefined &&
+      Number.isSafeInteger(configuredBusyTimeout) &&
+      configuredBusyTimeout >= 0
+        ? configuredBusyTimeout
+        : DEFAULT_BUSY_TIMEOUT_MS;
     // Wait for a concurrent opener before the first write (auto_vacuum on a new file).
-    database.exec("PRAGMA busy_timeout = 5000;");
+    database.exec(`PRAGMA busy_timeout = ${busyTimeoutMs};`);
     initializeSqliteReclamation(database);
     database.exec(`
       PRAGMA foreign_keys = ON;
       PRAGMA journal_mode = WAL;
+      PRAGMA synchronous = NORMAL;
       CREATE TABLE IF NOT EXISTS memory_facts (
         id TEXT PRIMARY KEY,
         scope_kind TEXT NOT NULL CHECK (scope_kind IN ('bot', 'workspace')),
@@ -292,6 +339,10 @@ export class MemoryStore {
         ON memory_facts(scope_kind, scope_id, normalized_text) WHERE state = 'active';
       CREATE INDEX IF NOT EXISTS memory_scope_state
         ON memory_facts(scope_kind, scope_id, state, always_on, updated_at);
+      CREATE INDEX IF NOT EXISTS memory_facts_source_chat
+        ON memory_facts(source_chat_id, provenance_kind);
+      CREATE INDEX IF NOT EXISTS memory_facts_supersedes
+        ON memory_facts(supersedes_id);
       CREATE VIRTUAL TABLE IF NOT EXISTS memory_facts_fts USING fts5(
         normalized_text,
         content='memory_facts',
@@ -322,6 +373,8 @@ export class MemoryStore {
       );
       CREATE INDEX IF NOT EXISTS memory_documents_scope
         ON memory_documents(scope_kind, scope_id, source_chat_id, updated_at);
+      CREATE INDEX IF NOT EXISTS memory_documents_source_chat
+        ON memory_documents(source_chat_id);
       CREATE VIRTUAL TABLE IF NOT EXISTS memory_documents_fts USING fts5(
         normalized_text,
         content='memory_documents',
@@ -346,7 +399,7 @@ export class MemoryStore {
       }
     }
     this.databaseFile = file;
-    await this.repairPrivateModes();
+    this.repairPrivateModes();
     try {
       await this.applyMigrations(database);
       purgeLegacyBotRows(database);
@@ -603,17 +656,15 @@ export class MemoryStore {
     return statement;
   }
 
-  private async repairPrivateModes(): Promise<void> {
+  private repairPrivateModes(): void {
     if (!this.databaseFile) return;
-    await Promise.all(
-      [this.databaseFile, `${this.databaseFile}-wal`, `${this.databaseFile}-shm`].map(async (file) => {
-        try {
-          await chmod(file, 0o600);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        }
-      }),
-    );
+    for (const file of [this.databaseFile, `${this.databaseFile}-wal`, `${this.databaseFile}-shm`]) {
+      try {
+        chmodSync(file, 0o600);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
   }
 
   async put(input: MemoryFactInput): Promise<MemoryFact> {
@@ -721,7 +772,7 @@ export class MemoryStore {
       database.exec("ROLLBACK");
       throw error;
     }
-    await this.repairPrivateModes();
+    this.repairPrivateModes();
     return factFromRow(this.statement(database, "SELECT * FROM memory_facts WHERE id = ?").get(id) as unknown as FactRow);
   }
 
@@ -770,73 +821,276 @@ export class MemoryStore {
     const database = await this.db();
     const valid = validateScope(scope);
     const sourceChatId = safeId(chatId, "source chat");
-    const prepared = documents.slice(-MAX_CHAT_DOCUMENTS).flatMap((document) => {
+    let chatPrepared = this.preparedDocuments.get(sourceChatId);
+    if (chatPrepared) {
+      this.preparedDocuments.delete(sourceChatId);
+    } else {
+      chatPrepared = new Map();
+    }
+    this.preparedDocuments.set(sourceChatId, chatPrepared);
+    while (this.preparedDocuments.size > MAX_PREPARED_CHAT_CACHES) {
+      const oldestChatId = this.preparedDocuments.keys().next().value;
+      if (oldestChatId === undefined) break;
+      this.preparedDocuments.delete(oldestChatId);
+    }
+    const prepared: Array<{
+      id: string;
+      kind: "transcript" | "artifact";
+      text: string;
+      sourceId: string;
+      createdAt?: number;
+    }> = [];
+    const startIndex = Math.max(0, documents.length - MAX_CHAT_DOCUMENTS);
+    for (let index = startIndex; index < documents.length; index += 1) {
+      const document = documents[index]!;
+      if (document.chatId !== sourceChatId || (document.kind !== "transcript" && document.kind !== "artifact")) {
+        continue;
+      }
+      if (document.createdAt !== undefined && (!Number.isSafeInteger(document.createdAt) || document.createdAt < 0)) {
+        continue;
+      }
+      const cached = chatPrepared.get(document.id);
+      if (
+        cached !== undefined &&
+        cached.kind === document.kind &&
+        cached.sourceId === document.sourceId &&
+        cached.rawText === document.text
+      ) {
+        if (cached.item !== null) {
+          if (cached.createdAt === document.createdAt) {
+            prepared.push(cached.item);
+          } else {
+            const updatedItem = {
+              id: cached.item.id,
+              kind: cached.item.kind,
+              text: cached.item.text,
+              sourceId: cached.item.sourceId,
+              createdAt: document.createdAt,
+            };
+            cached.createdAt = document.createdAt;
+            cached.item = updatedItem;
+            prepared.push(updatedItem);
+          }
+        }
+        continue;
+      }
       try {
-        if (document.chatId !== sourceChatId || !["transcript", "artifact"].includes(document.kind)) return [];
-        if (document.createdAt !== undefined && (!Number.isSafeInteger(document.createdAt) || document.createdAt < 0)) return [];
-        return [{
-          id: safeId(document.id, "document ID"),
+        const id = safeId(document.id, "document ID");
+        const sourceId = safeId(document.sourceId, "document source");
+        const text = normalizeMemoryText(document.text);
+        const item = {
+          id,
           kind: document.kind,
-          text: normalizeMemoryText(document.text),
-          sourceId: safeId(document.sourceId, "document source"),
+          text,
+          sourceId,
           createdAt: document.createdAt,
-        }];
+        };
+        chatPrepared.set(id, {
+          kind: document.kind,
+          sourceId,
+          rawText: document.text,
+          createdAt: document.createdAt,
+          item,
+        });
+        prepared.push(item);
       } catch {
         // Secret-like, internal, oversized, or malformed source material is not indexed.
-        return [];
+        if (
+          SAFE_ID.test(document.id) &&
+          SAFE_ID.test(document.sourceId) &&
+          document.text.length <= MAX_FACT_CHARS * 4
+        ) {
+          chatPrepared.set(document.id, {
+            kind: document.kind,
+            sourceId: document.sourceId,
+            rawText: document.text,
+            createdAt: document.createdAt,
+            item: null,
+          });
+        }
       }
-    });
+    }
+    if (chatPrepared.size > MAX_CHAT_DOCUMENTS + 64) {
+      const liveIds = new Set<string>();
+      for (let index = startIndex; index < documents.length; index += 1) {
+        liveIds.add(documents[index]!.id);
+      }
+      for (const id of chatPrepared.keys()) {
+        if (!liveIds.has(id)) chatPrepared.delete(id);
+      }
+    }
+    const cacheKey = `${valid.kind}\0${valid.id}\0${sourceChatId}`;
     database.exec("BEGIN IMMEDIATE");
-    let inserted = 0;
     let evicted = 0;
     let atCapacity = false;
+    let mutated = false;
     try {
       const now = this.now();
-      const previousAges = new Map((this.statement(database, `
-        SELECT id, updated_at FROM memory_documents
-        WHERE source_chat_id = ? AND scope_kind = ? AND scope_id = ?
-      `).all(sourceChatId, valid.kind, valid.id) as Array<{ id: string; updated_at: number }>).
-        map((row) => [row.id, row.updated_at]));
+      const { data_version: dataVersion } = this.statement(database, "PRAGMA data_version").get() as {
+        data_version: number;
+      };
+      if (this.cachedDataVersion !== dataVersion) {
+        this.chatDocumentCache.clear();
+        this.cachedDataVersion = dataVersion;
+      }
+      let storedById = this.chatDocumentCache.get(cacheKey);
+      if (!storedById) {
+        const storedRows = this.statement(database, `
+          SELECT id, kind, normalized_text, source_id, updated_at
+          FROM memory_documents
+          WHERE scope_kind = ? AND scope_id = ? AND source_chat_id = ?
+        `).all(valid.kind, valid.id, sourceChatId) as Array<{
+          id: string;
+          kind: "transcript" | "artifact";
+          normalized_text: string;
+          source_id: string;
+          updated_at: number;
+        }>;
+        storedById = new Map();
+        for (let index = 0; index < storedRows.length; index += 1) {
+          const row = storedRows[index]!;
+          storedById.set(row.id, row);
+        }
+      }
+      const seenIds = new Set<string>();
+      let unchangedCount = 0;
+      const toDeleteIds: string[] = [];
+      const toInsert: Array<{
+        id: string;
+        kind: "transcript" | "artifact";
+        text: string;
+        sourceId: string;
+        updatedAt: number;
+      }> = [];
+      for (const document of prepared) {
+        const previous = storedById.get(document.id);
+        const updatedAt = Math.min(now, document.createdAt ?? now, previous?.updated_at ?? now);
+        if (seenIds.has(document.id)) {
+          toInsert.push({
+            id: document.id,
+            kind: document.kind,
+            text: document.text,
+            sourceId: document.sourceId,
+            updatedAt,
+          });
+          continue;
+        }
+        seenIds.add(document.id);
+        if (
+          previous !== undefined &&
+          previous.kind === document.kind &&
+          previous.normalized_text === document.text &&
+          previous.source_id === document.sourceId &&
+          previous.updated_at === updatedAt
+        ) {
+          unchangedCount += 1;
+          continue;
+        }
+        if (previous !== undefined) {
+          toDeleteIds.push(document.id);
+        }
+        toInsert.push({
+          id: document.id,
+          kind: document.kind,
+          text: document.text,
+          sourceId: document.sourceId,
+          updatedAt,
+        });
+      }
+      for (const id of storedById.keys()) {
+        if (!seenIds.has(id)) {
+          toDeleteIds.push(id);
+        }
+      }
       // Scoped delete: legacy-scope copies of this chat's documents (imported
       // for downgrade compatibility) must not be wiped by a new-scope write.
-      this.statement(database, "DELETE FROM memory_documents WHERE source_chat_id = ? AND scope_kind = ? AND scope_id = ?")
-        .run(sourceChatId, valid.kind, valid.id);
+      // Modified rows are deleted and re-inserted so FTS5 insert/delete triggers run.
+      if (toDeleteIds.length > 0) {
+        const deleteOne = this.statement(
+          database,
+          "DELETE FROM memory_documents WHERE id = ? AND scope_kind = ? AND scope_id = ? AND source_chat_id = ?",
+        );
+        for (const id of toDeleteIds) {
+          if (Number(deleteOne.run(id, valid.kind, valid.id, sourceChatId).changes) > 0) {
+            mutated = true;
+          }
+        }
+      }
       const existing = this.statement(database, `
         SELECT count(*) AS count FROM memory_documents WHERE scope_kind = ? AND scope_id = ?
       `).get(valid.kind, valid.id) as { count: number };
-      const excess = Math.max(0, Number(existing.count) + prepared.length - MAX_SCOPE_DOCUMENTS);
-      evicted = Number(this.statement(database, `
-        DELETE FROM memory_documents WHERE rowid IN (
-          SELECT rowid FROM memory_documents WHERE scope_kind = ? AND scope_id = ?
-          ORDER BY updated_at ASC, source_chat_id ASC, id ASC LIMIT ?
-        )
-      `).run(valid.kind, valid.id, excess).changes);
-      atCapacity = Number(existing.count) - evicted + prepared.length >= MAX_SCOPE_DOCUMENTS;
-      const insert = this.statement(database, `
-        INSERT INTO memory_documents (
-          id, scope_kind, scope_id, kind, normalized_text, source_chat_id, source_id, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-      for (const document of prepared) {
-        insert.run(
-          document.id,
-          valid.kind,
-          valid.id,
-          document.kind,
-          document.text,
-          sourceChatId,
-          document.sourceId,
-          Math.min(now, document.createdAt ?? now, previousAges.get(document.id) ?? now),
-        );
-        inserted += 1;
+      const otherChatsCount = Math.max(0, Number(existing.count) - unchangedCount);
+      const excess = Math.max(0, otherChatsCount + prepared.length - MAX_SCOPE_DOCUMENTS);
+      if (excess > 0) {
+        evicted = Number(this.statement(database, `
+          DELETE FROM memory_documents WHERE rowid IN (
+            SELECT rowid FROM memory_documents
+            WHERE scope_kind = ? AND scope_id = ? AND source_chat_id <> ?
+            ORDER BY updated_at ASC, source_chat_id ASC, id ASC LIMIT ?
+          )
+        `).run(valid.kind, valid.id, sourceChatId, excess).changes);
+        if (evicted > 0) mutated = true;
+      }
+      atCapacity = otherChatsCount - evicted + prepared.length >= MAX_SCOPE_DOCUMENTS;
+      if (toInsert.length > 0) {
+        const insert = this.statement(database, `
+          INSERT INTO memory_documents (
+            id, scope_kind, scope_id, kind, normalized_text, source_chat_id, source_id, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        for (const document of toInsert) {
+          insert.run(
+            document.id,
+            valid.kind,
+            valid.id,
+            document.kind,
+            document.text,
+            sourceChatId,
+            document.sourceId,
+            document.updatedAt,
+          );
+          mutated = true;
+        }
       }
       database.exec("COMMIT");
+      for (let index = 0; index < toDeleteIds.length; index += 1) {
+        storedById.delete(toDeleteIds[index]!);
+      }
+      for (let index = 0; index < toInsert.length; index += 1) {
+        const document = toInsert[index]!;
+        storedById.set(document.id, {
+          id: document.id,
+          kind: document.kind,
+          normalized_text: document.text,
+          source_id: document.sourceId,
+          updated_at: document.updatedAt,
+        });
+      }
+      if (evicted > 0) {
+        this.chatDocumentCache.clear();
+      } else {
+        this.chatDocumentCache.delete(cacheKey);
+      }
+      this.chatDocumentCache.set(cacheKey, storedById);
+      while (this.chatDocumentCache.size > MAX_PREPARED_CHAT_CACHES) {
+        const oldestKey = this.chatDocumentCache.keys().next().value;
+        if (oldestKey === undefined) break;
+        this.chatDocumentCache.delete(oldestKey);
+      }
     } catch (error) {
       database.exec("ROLLBACK");
+      this.chatDocumentCache.delete(cacheKey);
       throw error;
     }
-    await this.repairPrivateModes();
-    return { accepted: inserted, rejected: documents.length - inserted, evicted, atCapacity };
+    if (mutated) {
+      this.repairPrivateModes();
+    }
+    return {
+      accepted: prepared.length,
+      rejected: documents.length - prepared.length,
+      evicted,
+      atCapacity,
+    };
   }
 
   async recall(scope: MemoryScope, query: string, limit = 8): Promise<MemoryRecallResult[]> {
@@ -906,7 +1160,7 @@ export class MemoryStore {
       database.exec("ROLLBACK");
       throw error;
     }
-    await this.repairPrivateModes();
+    this.repairPrivateModes();
     return removed;
   }
 
@@ -932,7 +1186,9 @@ export class MemoryStore {
       database.exec("ROLLBACK");
       throw error;
     }
-    await this.repairPrivateModes();
+    this.preparedDocuments.delete(sourceChatId);
+    this.chatDocumentCache.clear();
+    this.repairPrivateModes();
     return removed;
   }
 
@@ -959,16 +1215,21 @@ export class MemoryStore {
       database.exec("ROLLBACK");
       throw error;
     }
-    await this.repairPrivateModes();
+    this.preparedDocuments.clear();
+    this.chatDocumentCache.clear();
+    this.repairPrivateModes();
     return removed;
   }
 
   async close(): Promise<void> {
     this.openGeneration += 1;
+    this.preparedDocuments.clear();
+    this.chatDocumentCache.clear();
+    this.cachedDataVersion = undefined;
     if (this.database) reclaimSqlitePages(this.database);
     this.database?.close();
     this.database = undefined;
-    await this.repairPrivateModes();
+    this.repairPrivateModes();
     this.databaseFile = undefined;
   }
 }

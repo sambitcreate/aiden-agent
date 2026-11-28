@@ -364,3 +364,67 @@ test("No workspace chats share the default workspace's memory whatever their hid
   assert.deepEqual(scope, { kind: "workspace", id: "default" });
   assert.deepEqual(memoryScopeForChat(chat({ workspaceId: "default" })), scope);
 });
+
+test("memoryMetadataForChat reuses cached per-message entries across turns and recomputes changed messages", () => {
+  const baseMessages: Chat["messages"] = [
+    {
+      id: "msg-1",
+      role: "user",
+      content: "Plan the cobalt release.",
+      createdAt: 10,
+      attachments: [{
+        id: "att-1",
+        name: "notes.txt",
+        mimeType: "text/plain",
+        kind: "text",
+        size: 42,
+      }],
+    },
+    {
+      id: "msg-2",
+      role: "assistant",
+      content: "Cobalt ships Wednesday.",
+      createdAt: 20,
+      uiVisuals: [{
+        version: 1,
+        kind: "ui",
+        id: "vis-1",
+        title: "Schedule",
+        catalogVersion: 1,
+        tree: { t: "Visual", k: "0" },
+        fallbackText: "Wednesday 09:00",
+      }],
+    },
+  ];
+  const initial = memoryMetadataForChat(chat({ id: "cache-chat", messages: baseMessages }));
+  assert.equal(initial.length, 4);
+
+  // Freshly deserialized message copies (matching chatStore.get reads) + 1 appended message reuse cached entries.
+  const deserialized = JSON.parse(
+    JSON.stringify([
+      ...baseMessages,
+      { id: "msg-3", role: "user", content: "Add smoke checks.", createdAt: 30 },
+    ]),
+  ) as Chat["messages"];
+  const nextTurn = memoryMetadataForChat(chat({ id: "cache-chat", messages: deserialized }));
+  assert.equal(nextTurn.length, 5);
+  assert.equal(nextTurn[0], initial[0]);
+  assert.equal(nextTurn[1], initial[1]);
+  assert.equal(nextTurn[2], initial[2]);
+  assert.equal(nextTurn[3], initial[3]);
+  assert.equal(nextTurn[4]?.sourceId, "msg-3");
+
+  // Mutating a message's content or moving messages to another chat recomputes affected entries.
+  const editedMessages: Chat["messages"] = [
+    baseMessages[0]!,
+    { ...baseMessages[1]!, content: "Cobalt ships Thursday." },
+  ];
+  const edited = memoryMetadataForChat(chat({ id: "cache-chat", messages: editedMessages }));
+  assert.equal(edited[0], initial[0]);
+  assert.equal(edited[1], initial[1]);
+  assert.notEqual(edited[2], initial[2]);
+  assert.match(edited[2]?.text ?? "", /Thursday/u);
+
+  const differentChat = memoryMetadataForChat(chat({ id: "other-chat", messages: baseMessages }));
+  assert.notEqual(differentChat[0]?.id, initial[0]?.id);
+});

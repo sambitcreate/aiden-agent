@@ -30,3 +30,10 @@ Deterministic tests use a separate real SQLite connection that commits exactly b
 ## Harness H1a retention — 2026-10-19
 
 Metadata now admits current-chat documents by transactionally evicting oldest other-chat metadata at the 5,000 scope cap (1,000 chat cap unchanged). Age is min(source createdAt, first admission, current clock), with deterministic chat/id ties. Approved facts unaffected. Index result exposes accepted/rejected/evicted/capacity counts; llm-client writes only count diagnostics. Store/context/surface 39 pass; fresh medium review verified skew fix and two-handle/rollback probes.
+
+## Incremental metadata diffing & SQLite tuning — 2026-11-28
+
+- `MemoryStore.replaceChatMetadata` now diffs the bounded 1,000-document chat window against stored rows (cached per scoped chat with `PRAGMA data_version` external-writer invalidation and pure per-document normalization memoization), leaving unchanged rows untouched, deleting removed IDs, deleting + re-inserting modified rows for FTS5 triggers, evicting only foreign-chat rows (`source_chat_id <> ?`) when `excess > 0`, and skipping `chmod` (`repairPrivateModes`) on no-op turns.
+- `memoryMetadataForChat` in `main/services/memory-context.ts` caches extracted metadata per message (both by object identity and bounded per-chat message ID map) so unchanged conversation history skips repeated SHA-256 hashing and text slicing across turns.
+- `MemoryStore.openDatabase` sets `PRAGMA synchronous = NORMAL` under WAL mode and creates additive indexes on `memory_facts(source_chat_id, provenance_kind)`, `memory_facts(supersedes_id)`, and `memory_documents(source_chat_id)` so `deleteSourceChat` executes exclusively via indexed `SEARCH` plans.
+- `main/services/memory-store-main.ts` caps main-thread `busyTimeoutMs` at `100` ms while CLI stores keep the `5,000` ms default.
