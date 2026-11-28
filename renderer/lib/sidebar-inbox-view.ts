@@ -4,7 +4,7 @@ import type { ChatPendingAttention } from "../shared/chat-pending-attention";
 import type { ChatRowState } from "../shared/chat-row-state";
 import type { ChatTriageEntry } from "../shared/chat-triage";
 import { formatSnoozeMenuTime, formatSnoozeStatus, triageSignals } from "./inbox-triage";
-import { isNoWorkspace, NO_WORKSPACE_GROUP_LABEL } from "./no-workspace";
+import { indexWorkspacesById, isNoWorkspace, NO_WORKSPACE_GROUP_LABEL } from "./no-workspace";
 import {
   INBOX_SECTIONS,
   INBOX_TIERS,
@@ -94,47 +94,56 @@ export interface LocalInboxInput {
  * Bot chats (they show through their Bot) and chats of removed workspaces.
  * The Assistant chat and workspace-less scheduled chats are listed.
  */
-export function localInboxProject(chat: ChatMeta, workspaces: readonly Workspace[]): string | null {
-  const workspace = chat.workspaceId === undefined
-    ? undefined
-    : workspaces.find((candidate) => candidate.id === chat.workspaceId);
+export function localInboxProject(
+  chat: ChatMeta,
+  workspaces: readonly Workspace[] | ReadonlyMap<string, Workspace>,
+): string | null {
+  const workspace =
+    chat.workspaceId === undefined
+      ? undefined
+      : "get" in workspaces
+        ? workspaces.get(chat.workspaceId)
+        : workspaces.find((candidate) => candidate.id === chat.workspaceId);
   if (!isLocalInboxChat(chat, () => workspace !== undefined)) return null;
   if (workspace) return isNoWorkspace(workspace) ? NO_WORKSPACE_GROUP_LABEL : workspace.name;
   return chat.workspaceId === ASSISTANT_WORKSPACE_ID ? INBOX_ASSISTANT_PROJECT_LABEL : INBOX_SCHEDULED_PROJECT_LABEL;
 }
 
 export function localInboxEntries(input: LocalInboxInput): InboxEntry[] {
-  return input.chats.flatMap((chat): InboxEntry[] => {
-    const project = localInboxProject(chat, input.workspaces);
-    if (project === null) return [];
+  if (input.chats.length === 0) return [];
+  const workspacesById = indexWorkspacesById(input.workspaces);
+  const hostLabel = localMachineLabel(input.platform);
+  const entries: InboxEntry[] = [];
+  for (const chat of input.chats) {
+    const project = localInboxProject(chat, workspacesById);
+    if (project === null) continue;
     const pending = input.pending.get(chat.id);
     const attention = pending?.kind === "detached" || pending?.kind === "interrupted" || pending?.kind === "goal" ? pending.kind : undefined;
-    return [
-      {
-        key: projectOrderKey(LOCAL_SIDEBAR_HOST_ID, chat.id),
-        title: chat.title,
-        project,
-        hostId: LOCAL_SIDEBAR_HOST_ID,
-        hostLabel: localMachineLabel(input.platform),
-        ...(pending ? { pending } : {}),
-        source: { kind: "local", chat },
-        signals: {
-          rowState: input.rowState(chat.id),
-          unread: input.unread(chat),
-          failed: chat.lastAssistantFailed === true,
-          ...(attention ? { attention } : {}),
-          isOpen: chat.id === input.activeChatId,
-          hostOnline: true,
-          updatedAt: chat.updatedAt,
-          ...(chat.lastAssistantAt !== undefined ? { lastAssistantAt: chat.lastAssistantAt } : {}),
-          ...(chat.lastAssistantMessageId ? { lastAssistantMessageId: chat.lastAssistantMessageId } : {}),
-          ...(pending?.since !== undefined ? { attentionSince: pending.since } : {}),
-          ...(pending?.runStartedAt !== undefined ? { runStartedAt: pending.runStartedAt } : {}),
-          ...triageSignals(input.triage?.(chat.id)),
-        },
+    entries.push({
+      key: projectOrderKey(LOCAL_SIDEBAR_HOST_ID, chat.id),
+      title: chat.title,
+      project,
+      hostId: LOCAL_SIDEBAR_HOST_ID,
+      hostLabel,
+      ...(pending ? { pending } : {}),
+      source: { kind: "local", chat },
+      signals: {
+        rowState: input.rowState(chat.id),
+        unread: input.unread(chat),
+        failed: chat.lastAssistantFailed === true,
+        ...(attention ? { attention } : {}),
+        isOpen: chat.id === input.activeChatId,
+        hostOnline: true,
+        updatedAt: chat.updatedAt,
+        ...(chat.lastAssistantAt !== undefined ? { lastAssistantAt: chat.lastAssistantAt } : {}),
+        ...(chat.lastAssistantMessageId ? { lastAssistantMessageId: chat.lastAssistantMessageId } : {}),
+        ...(pending?.since !== undefined ? { attentionSince: pending.since } : {}),
+        ...(pending?.runStartedAt !== undefined ? { runStartedAt: pending.runStartedAt } : {}),
+        ...triageSignals(input.triage?.(chat.id)),
       },
-    ];
-  });
+    });
+  }
+  return entries;
 }
 
 /** One local Bot, as the Bots sidebar reads it (`useBotRows`). */

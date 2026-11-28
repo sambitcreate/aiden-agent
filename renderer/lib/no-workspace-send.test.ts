@@ -1,12 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { ASSISTANT_WORKSPACE_ID } from "../shared/assistant";
+import { DEFAULT_CHAT_WORKSPACE_ID } from "../shared/chat-workspace";
 import {
   noWorkspaceFolderForFirstSend,
   rehomeStrandedNoWorkspaceDrafts,
   releasedNoWorkspaceIds,
 } from "./no-workspace-send";
-import { noWorkspaceHome, workspaceChoices } from "./no-workspace";
-import type { Workspace } from "./types";
+import {
+  indexWorkspacesById,
+  noWorkspaceHome,
+  resolveSidebarGroupWorkspaceId,
+  sidebarGroupWorkspaceId,
+  workspaceChoices,
+} from "./no-workspace";
+import { localInboxEntries, localInboxProject } from "./sidebar-inbox-view";
+import type { ChatMeta, Workspace } from "./types";
 
 function api(chatsByWorkspace: Record<string, string[]>) {
   let created = 0;
@@ -44,6 +53,165 @@ test("the Chats group is represented by the default home, else the oldest hidden
   assert.equal(noWorkspaceHome([project, record("b", 9, true), record("a", 5, true)])?.id, "a");
   assert.equal(noWorkspaceHome([record("a", 5, true), record("default", 7, true)])?.id, "default");
   assert.deepEqual(workspaceChoices([project, record("a", 5, true)]).map((entry) => entry.id), ["project"]);
+});
+
+test("indexed group resolution preserves pass-through and first-match duplicate-id rules", () => {
+  const onlyProjects = [record("project-a", 1), record("project-b", 2)];
+  const resolveWithoutHome = resolveSidebarGroupWorkspaceId(onlyProjects, indexWorkspacesById(onlyProjects));
+  for (const workspaceId of ["project-a", "project-b", "unregistered"]) {
+    assert.equal(resolveWithoutHome(workspaceId), workspaceId);
+    assert.equal(resolveWithoutHome(workspaceId), sidebarGroupWorkspaceId(workspaceId, onlyProjects));
+  }
+
+  const withDuplicates = [
+    record("project", 1),
+    record("hidden-home", 2, true),
+    record("hidden-other", 5, true),
+    record("dup-project-first", 6),
+    record("dup-project-first", 7, true),
+    record("dup-hidden-first", 8, true),
+    record("dup-hidden-first", 9),
+  ];
+  const byId = indexWorkspacesById(withDuplicates);
+  const resolveGroup = resolveSidebarGroupWorkspaceId(withDuplicates, byId);
+  for (const workspaceId of ["project", "hidden-home", "hidden-other", "dup-project-first", "dup-hidden-first", "missing"]) {
+    assert.equal(resolveGroup(workspaceId), sidebarGroupWorkspaceId(workspaceId, withDuplicates), workspaceId);
+  }
+  assert.equal(resolveGroup("dup-project-first"), "dup-project-first");
+  assert.equal(resolveGroup("dup-hidden-first"), "hidden-home");
+  assert.equal(resolveGroup("missing"), "missing");
+});
+
+test("localInboxEntries and indexed draft grouping match linear scans with O(N + W) workspace id reads", () => {
+  const workspaceCount = 5_000;
+  const chatCount = 5_000;
+  const draftCount = 25;
+  let idReads = 0;
+
+  const instrumentedWorkspace = (raw: Workspace): Workspace => {
+    const tracked = {
+      name: raw.name,
+      permission: raw.permission,
+      createdAt: raw.createdAt,
+      updatedAt: raw.updatedAt,
+      ...(raw.noWorkspace ? { noWorkspace: true } : {}),
+    } as Workspace;
+    Object.defineProperty(tracked, "id", {
+      enumerable: true,
+      get() {
+        idReads += 1;
+        return raw.id;
+      },
+    });
+    return tracked;
+  };
+
+  const rawWorkspaces: Workspace[] = [
+    record("project-0", 1),
+    record("project-1", 2),
+    record("dup-id", 3),
+    record("dup-id", 4, true),
+    ...Array.from({ length: workspaceCount - 4 }, (_, index) => record(`hidden-${index}`, index + 10, true)),
+  ];
+  const trackedWorkspaces = rawWorkspaces.map(instrumentedWorkspace);
+
+  const chats: ChatMeta[] = Array.from({ length: chatCount }, (_, index) => {
+    const id = `chat-${index}`;
+    const createdAt = 1_000 + index;
+    const updatedAt = 2_000 + index;
+    if (index === 0) return { id, title: id, workspaceId: ASSISTANT_WORKSPACE_ID, createdAt, updatedAt };
+    if (index === 1) return { id, title: id, workspaceId: undefined, createdAt, updatedAt };
+    if (index === 2) return { id, title: id, workspaceId: DEFAULT_CHAT_WORKSPACE_ID, createdAt, updatedAt };
+    if (index === 3) return { id, title: id, workspaceId: "project-0", botId: "bot-1", createdAt, updatedAt };
+    if (index === 4) return { id, title: id, workspaceId: "removed-workspace", createdAt, updatedAt };
+    if (index === 5) return { id, title: id, workspaceId: "dup-id", createdAt, updatedAt };
+    if (index % 50 === 0) return { id, title: id, workspaceId: `project-${index % 2}`, createdAt, updatedAt };
+    return {
+      id,
+      title: id,
+      workspaceId: `hidden-${index % (workspaceCount - 4)}`,
+      createdAt,
+      updatedAt,
+    };
+  });
+
+  idReads = 0;
+  const entries = localInboxEntries({
+    platform: "darwin",
+    chats,
+    workspaces: trackedWorkspaces,
+    rowState: () => "idle",
+    unread: () => false,
+    pending: new Map(),
+  });
+  const inboxIdReads = idReads;
+  assert.ok(
+    inboxIdReads <= workspaceCount,
+    `expected localInboxEntries to read each workspace id at most once (${workspaceCount}), saw ${inboxIdReads}`,
+  );
+
+  // Verify exact output equivalence against single-lookup localInboxProject(chat, rawWorkspaces) on a slice covering every branch and tail workspace.
+  const verificationIndices = new Set<number>([
+    0, 1, 2, 3, 4, 5, 50, 51, 100,
+    chatCount - 3, chatCount - 2, chatCount - 1,
+  ]);
+  const sampleChats = chats.filter((_, index) => verificationIndices.has(index));
+  const sampleEntries = localInboxEntries({
+    platform: "darwin",
+    chats: sampleChats,
+    workspaces: trackedWorkspaces,
+    rowState: () => "idle",
+    unread: () => false,
+    pending: new Map(),
+  });
+  const expectedSample = sampleChats.flatMap((chat) => {
+    const project = localInboxProject(chat, rawWorkspaces);
+    return project === null ? [] : [[chat.title, project]];
+  });
+  assert.deepEqual(
+    sampleEntries.map((entry) => [entry.title, entry.project]),
+    expectedSample,
+  );
+  assert.equal(entries.length, chatCount - 2, "only the Bot chat and removed-workspace chat are excluded");
+
+  const drafts: ChatMeta[] = Array.from({ length: draftCount }, (_, index) => ({
+    id: `draft-${index}`,
+    title: "New chat",
+    workspaceId:
+      index === 0
+        ? "project-0"
+        : index === 1
+          ? "dup-id"
+          : index === 2
+            ? "unregistered-ws"
+            : `hidden-${workspaceCount - 5 - index}`,
+    createdAt: 10_000 + index,
+    updatedAt: 10_000 + index,
+  }));
+
+  idReads = 0;
+  const byId = indexWorkspacesById(trackedWorkspaces);
+  const resolveGroup = resolveSidebarGroupWorkspaceId(trackedWorkspaces, byId);
+  const indexedGroups = new Map<string, string[]>();
+  for (let index = drafts.length - 1; index >= 0; index -= 1) {
+    const draftChat = drafts[index]!;
+    const groupId = resolveGroup(draftChat.workspaceId!);
+    const group = indexedGroups.get(groupId);
+    if (group) group.push(draftChat.id);
+    else indexedGroups.set(groupId, [draftChat.id]);
+  }
+  const draftIdReads = idReads;
+  assert.ok(
+    draftIdReads <= workspaceCount * 2 + 1,
+    `expected indexed draft grouping to stay O(N + W) (<= ${workspaceCount * 2 + 1}), saw ${draftIdReads}`,
+  );
+
+  const baselineGroups = new Map<string, string[]>();
+  for (const draftChat of [...drafts].reverse()) {
+    const groupId = sidebarGroupWorkspaceId(draftChat.workspaceId!, rawWorkspaces);
+    baselineGroups.set(groupId, [...(baselineGroups.get(groupId) ?? []), draftChat.id]);
+  }
+  assert.deepEqual([...indexedGroups.entries()], [...baselineGroups.entries()]);
 });
 
 type TestDraft = { chat: { id: string; workspaceId: string }; sending: boolean };
