@@ -1,6 +1,7 @@
 {
   "version": 1,
   "macos": [
+    "assistant-scheduled-profile.spec.ts",
     "bots-persistence.spec.ts",
     "environment-devices-agent.spec.ts",
     "environment-devices-android.spec.ts",
@@ -9,6 +10,7 @@
     "environment-devices-tab.spec.ts",
     "guided-setup.spec.ts",
     "keep-going-goals-computer-use.spec.ts",
+    "settings-model-picker.spec.ts",
     "settings-simulator-ssh-hosts.spec.ts"
   ],
   "full": [

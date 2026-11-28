@@ -285,6 +285,14 @@ test("pull requests send only their selected macOS-only specs to a Mac; other ev
   assert.ok(!devices.specs.includes("bots-persistence.spec.ts"));
   assert.ok(devices.specs.every((file) => map.macos.includes(file)));
 
+  // Settings and Aiden Live changes keep their darwin-branch specs on a Mac too.
+  const settings = plan("pull_request", ["renderer/components/settings/about-settings.tsx"]);
+  assert.equal(settings.scope, "macos");
+  assert.ok(settings.specs.includes("settings-model-picker.spec.ts"));
+  const assistant = plan("pull_request", ["renderer/components/assistant/live-panel.tsx"]);
+  assert.equal(assistant.scope, "macos");
+  assert.ok(assistant.specs.includes("assistant-scheduled-profile.spec.ts"));
+
   // A shared-harness change selects every spec; the Mac still runs only the macOS-only ones.
   const harness = plan("pull_request", ["tests/e2e/fixtures.ts"]);
   assert.equal(harness.scope, "macos");
