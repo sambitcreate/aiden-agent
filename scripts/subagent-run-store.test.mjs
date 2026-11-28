@@ -13,6 +13,7 @@ import {
   rename,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
@@ -415,6 +416,64 @@ test("production run-store ignores native capture pause controls", async (t) => 
   await writeFile(stale, "stale\n", { mode: 0o600 });
   assert.equal(await helper.request("cleanup"), "ok 1");
   await assert.rejects(access(marker));
+
+  await helper.close();
+});
+
+test("stat returns generation tokens without reading bytes and rejects unsafe or permissive targets", async (t) => {
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-run-store-stat-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const directory = path.join(root, "private-runs");
+  const target = path.join(directory, "runs.json");
+  await mkdir(directory, { mode: 0o700 });
+
+  const helper = startHelper(t, directory, productionBinary);
+  assert.equal(await helper.request("stat"), "missing");
+
+  const written = await helper.request(writeCommand("missing", '{"version":2}\n'));
+  const generation = /^ok ([0-9a-f]+(?:-[0-9a-f]+){6,8})$/u.exec(written)?.[1];
+  assert.ok(generation);
+  assert.equal(await helper.request("stat"), `stat ${generation}`);
+  assert.equal(parseData(await helper.request("read")).generation, generation);
+
+  // Non-0600 regular file fails stat with invalid_mode without mutating mode bits.
+  await chmod(target, 0o644);
+  assert.equal(await helper.request("stat"), "error invalid_mode");
+  assert.equal((await stat(target)).mode & 0o777, 0o644);
+  await chmod(target, 0o600);
+  assert.match(await helper.request("stat"), /^stat [0-9a-f]+(?:-[0-9a-f]+){6,8}$/u);
+
+  // Hardlinked 0600 regular file is rejected.
+  const hardlinkPath = path.join(root, "external-hardlink.json");
+  await link(target, hardlinkPath);
+  assert.equal(await helper.request("stat"), "error destination_changed");
+  await rm(hardlinkPath);
+  assert.match(await helper.request("stat"), /^stat [0-9a-f]+(?:-[0-9a-f]+){6,8}$/u);
+
+  // Oversized 0600 regular file reports oversize with the exact generation token.
+  const oversizedBytes = Buffer.alloc(8 * 1024 * 1024 + 1, 0x20);
+  await writeFile(target, oversizedBytes, { mode: 0o600 });
+  await chmod(target, 0o600);
+  const statOversize = await helper.request("stat");
+  const readOversize = await helper.request("read");
+  assert.match(statOversize, /^oversize [0-9a-f]+(?:-[0-9a-f]+){6,8}$/u);
+  assert.equal(statOversize, readOversize);
+
+  // Symlink target is rejected without following.
+  await rm(target);
+  const outside = path.join(root, "outside.json");
+  await writeFile(outside, "outside\n", { mode: 0o600 });
+  await symlink(outside, target);
+  assert.equal(await helper.request("stat"), "error destination_changed");
+
+  // FIFO target is rejected promptly without blocking.
+  await rm(target);
+  await createFifo(target);
+  assert.equal(
+    await requestPromptly(helper.request("stat"), "stat"),
+    "error destination_changed",
+  );
 
   await helper.close();
 });

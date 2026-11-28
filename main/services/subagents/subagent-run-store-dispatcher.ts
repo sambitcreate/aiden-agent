@@ -1,8 +1,9 @@
 import type { McpToolCallNotSentError } from "./subagent-effect-v2.js";
 import {
   adaptSubagentRunSnapshotV2ToV1,
+  markTrustedSubagentRunSnapshotList,
   parseSubagentRunSnapshot,
-  parseSubagentRunSnapshotV2,
+  type SubagentEffectActivityV1,
   type SubagentRunSnapshot,
   type SubagentRunSnapshotV1,
   type SubagentRunSnapshotV2,
@@ -40,7 +41,12 @@ export interface SubagentRunStoreDispatcherOptions {
     | "completeChatDeletion"
     | "flush"
     | "close"
-  >;
+  > & {
+    getWithEffectActivity?(
+      runId: string,
+      chatId: string,
+    ): Promise<{ snapshot: SubagentRunSnapshotV1; effects: SubagentEffectActivityV1[] } | null>;
+  };
   v2: Pick<
     SubagentRunStoreV2,
     | "reserveRun"
@@ -63,7 +69,12 @@ export interface SubagentRunStoreDispatcherOptions {
     | "completeChatDeletion"
     | "flush"
     | "close"
-  >;
+  > & {
+    getWithEffectActivity?(
+      runId: string,
+      chatId: string,
+    ): Promise<{ snapshot: SubagentRunSnapshotV2; effects: SubagentEffectActivityV1[] } | null>;
+  };
 }
 
 function projectV2(
@@ -138,9 +149,8 @@ export function createSubagentRunStoreDispatcher(
         if (!v1) throw new Error("Subagent V2 snapshot cannot be represented by V1 rollback storage.");
         return options.v1.upsert(v1);
       }
-      const snapshot = parseSubagentRunSnapshotV2(value);
-      if (!snapshot || !manifest) throw new Error("V2 persistence requires an exact snapshot and private manifest.");
-      return projectV2(await options.v2.upsert(snapshot, manifest), projection);
+      if (!manifest) throw new Error("V2 persistence requires an exact snapshot and private manifest.");
+      return projectV2(await options.v2.upsert(value, manifest), projection);
     },
 
     async get(runId: string): Promise<SubagentRunSnapshot | null> {
@@ -153,7 +163,33 @@ export function createSubagentRunStoreDispatcher(
     async listByChat(chatId: string): Promise<SubagentRunSnapshot[]> {
       requireInitialized();
       if (options.selection === "v1") return options.v1.listByChat(chatId);
-      return (await options.v2.listByChat(chatId)).map((snapshot) => projectV2(snapshot, projection));
+      return markTrustedSubagentRunSnapshotList(
+        (await options.v2.listByChat(chatId)).map((snapshot) => projectV2(snapshot, projection)),
+      );
+    },
+
+    async getWithEffectActivity(
+      runId: string,
+      chatId: string,
+    ): Promise<{ snapshot: SubagentRunSnapshot; effects: SubagentEffectActivityV1[] } | null> {
+      requireInitialized();
+      if (options.selection === "v1") {
+        if (options.v1.getWithEffectActivity) {
+          return options.v1.getWithEffectActivity(runId, chatId);
+        }
+        const snapshot = await options.v1.get(runId);
+        return snapshot && snapshot.chatId === chatId ? { snapshot, effects: [] } : null;
+      }
+      if (options.v2.getWithEffectActivity) {
+        const detail = await options.v2.getWithEffectActivity(runId, chatId);
+        return detail
+          ? { snapshot: projectV2(detail.snapshot, projection), effects: detail.effects }
+          : null;
+      }
+      const snapshot = await options.v2.get(runId);
+      if (!snapshot || snapshot.chatId !== chatId) return null;
+      const effects = await options.v2.listEffectActivityForRun(runId, chatId);
+      return { snapshot: projectV2(snapshot, projection), effects };
     },
 
     async prepareEffect(value: unknown) {

@@ -11,8 +11,8 @@
       "source": "cde095d4e2059b8cc252c2f63701ed279f84a6f909c7842bc36c35cdd87a0dcc"
     },
     "subagent-run-store": {
-      "sha256": "f7b4c84443e2b443f59b315fdd892b89d0f21ef35c8709c563a6070337b18988",
-      "source": "bc81557e2b452e62b924af03d61aa4d561b0a7b3e985b17bc7d6b1e4e2b5f989"
+      "sha256": "8e61eb96140d86aaf420813d7bfced4ac44fab29c8ff93ed13ac6c8623003492",
+      "source": "3715ff3ecf0441c48a2ab0c1f5400c9bb8992b57ff994b14bd53b3925fed06df"
     },
     "subagent-shell-runner": {
       "sha256": "cdf992e9a63d104577a27c0ddc2833fdd50bb65c123c925a4ff73a15f0dfb18e",

@@ -45,7 +45,7 @@ test("historical inspector reads require a live document and matching chat owner
   ]);
   assert.match(handler, /rendererDocumentOwner\(/u);
   assert.match(handler, /readSubagentHistoryDetailForOwner\(/u);
-  assert.match(handler, /listEffectActivityForRun/u);
+  assert.match(handler, /getWithEffectActivity/u);
   assert.match(handler, /owner\.isDestroyed\(\)/u);
   assert.match(historyRead, /owner\.onInvalidated\(\(\) => undefined\)/u);
   assert.match(historyRead, /finally \{\s+removeOwnerInvalidation\(\);/u);
@@ -886,7 +886,7 @@ test("subagent history IPC applies the shared privacy validator before storage a
   const validation = handler.indexOf("parseSubagentHistoryRequestIds(");
   const guardedRead = handler.indexOf("try {", validation);
   const chatRead = handler.indexOf("getChat:", guardedRead);
-  const snapshotRead = handler.indexOf("getSnapshot:", guardedRead);
+  const snapshotRead = handler.indexOf("getSnapshotWithEffects:", guardedRead);
   const logging = handler.indexOf('logger.error("subagents"', guardedRead);
   assert.ok(featureGate >= 0);
   assert.ok(ownerResolution > featureGate);

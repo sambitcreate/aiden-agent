@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
 import type { TodoSnapshotViewV1 } from "../../renderer/shared/todo.js";
 import {
+  consumeTrustedSubagentRunSnapshotList,
   parseSubagentRunSnapshot,
   type SubagentRunSnapshot,
 } from "../../renderer/shared/subagent-runs.js";
@@ -207,7 +208,10 @@ export class AidenRemoteChatProgressService {
     const ticket = this.ports.events.revision(chatId);
     const chat = await this.ports.authorize(deviceId, chatId, "agents:read");
     const rawRuns = await this.ports.readAgents(chatId);
-    const runs = rawRuns.map((value) => parseSubagentRunSnapshot(value));
+    const runs: ReadonlyArray<SubagentRunSnapshot | undefined> =
+      consumeTrustedSubagentRunSnapshotList(rawRuns)
+        ? rawRuns
+        : rawRuns.map((value) => parseSubagentRunSnapshot(value));
     if (runs.some((run) => !run || run.chatId !== chatId)) {
       const value = {
         version: 1,
@@ -361,9 +365,11 @@ export class AidenRemoteChatProgressService {
       throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
     }
     await this.ports.authorize(deviceId, chatId, "agents:read");
-    const runs = (await this.ports.readAgents(chatId)).map((value) =>
-      parseSubagentRunSnapshot(value),
-    );
+    const rawRuns = await this.ports.readAgents(chatId);
+    const runs: ReadonlyArray<SubagentRunSnapshot | undefined> =
+      consumeTrustedSubagentRunSnapshotList(rawRuns)
+        ? rawRuns
+        : rawRuns.map((value) => parseSubagentRunSnapshot(value));
     const target = runs.find(
       (run): run is SubagentRunSnapshot =>
         run !== undefined &&

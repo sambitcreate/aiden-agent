@@ -414,6 +414,51 @@ static int install_store(int directory_fd, const char *expected_token,
                          const unsigned char *contents, size_t length,
                          char token[256]);
 
+static int stat_store(int directory_fd) {
+  int file_fd = openat(directory_fd, STORE_FILE, UNTRUSTED_READ_FLAGS);
+  if (file_fd < 0) {
+    if (errno == ENOENT) {
+      puts("missing");
+      return fflush(stdout) == 0 ? 0 : -1;
+    }
+    puts(errno == ELOOP ? "error destination_changed" : "error io_failed");
+    return fflush(stdout) == 0 ? 0 : -1;
+  }
+
+  struct stat identity;
+  if (fstat(file_fd, &identity) != 0) {
+    close(file_fd);
+    puts("error io_failed");
+    return fflush(stdout) == 0 ? 0 : -1;
+  }
+  if (!is_exclusive_regular_file(&identity)) {
+    close(file_fd);
+    puts("error destination_changed");
+    return fflush(stdout) == 0 ? 0 : -1;
+  }
+  if ((identity.st_mode & 07777) != 0600) {
+    close(file_fd);
+    puts("error invalid_mode");
+    return fflush(stdout) == 0 ? 0 : -1;
+  }
+  char token[256];
+  if (make_token(&identity, token, sizeof(token)) != 0) {
+    close(file_fd);
+    puts("error io_failed");
+    return fflush(stdout) == 0 ? 0 : -1;
+  }
+  if (close(file_fd) != 0) {
+    puts("error io_failed");
+    return fflush(stdout) == 0 ? 0 : -1;
+  }
+  if (identity.st_size < 0 || identity.st_size > MAX_STORE_BYTES) {
+    printf("oversize %s\n", token);
+    return fflush(stdout) == 0 ? 0 : -1;
+  }
+  printf("stat %s\n", token);
+  return fflush(stdout) == 0 ? 0 : -1;
+}
+
 static int read_store(int directory_fd) {
   int file_fd = openat(directory_fd, STORE_FILE, UNTRUSTED_READ_FLAGS);
   if (file_fd < 0) {
@@ -771,6 +816,11 @@ static int serve(int directory_fd) {
     }
     if (length > 0 && line[length - 1] == '\n')
       line[--length] = '\0';
+    if (strcmp(line, "stat") == 0) {
+      if (stat_store(directory_fd) != 0)
+        break;
+      continue;
+    }
     if (strcmp(line, "read") == 0) {
       if (read_store(directory_fd) != 0)
         break;

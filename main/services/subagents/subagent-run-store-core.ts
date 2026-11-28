@@ -3,10 +3,12 @@ import * as path from "node:path";
 import { isDeepStrictEqual, TextDecoder } from "node:util";
 import {
   isSafeSubagentIdentifier,
+  markTrustedSubagentRunSnapshotList,
   parseSubagentRunSnapshotV1,
   sameSubagentRunSnapshotIdentity,
   SUBAGENT_ACTIVE_STATES,
   subagentRunSnapshotProgresses,
+  type SubagentEffectActivityV1,
   type SubagentRunSnapshotV1,
 } from "../../../renderer/shared/subagent-runs.js";
 import { sanitizeSubagentSnapshotText } from "../../../renderer/shared/subagent-safe-text.js";
@@ -14,6 +16,7 @@ import {
   createNativeSubagentRunStoreStorage,
   SubagentRunStoreStorageError,
   type SubagentRunStoreGeneration,
+  type SubagentRunStoreStatResult,
   type SubagentRunStoreStorage,
 } from "./subagent-run-store-io.js";
 
@@ -36,6 +39,34 @@ export interface SubagentRunDatabaseV1 {
   version: typeof STORE_VERSION;
   runs: SubagentRunSnapshotV1[];
   pendingChatDeletions: string[];
+}
+
+interface SubagentRunStoreV1Indexes {
+  runsById: Map<string, SubagentRunSnapshotV1>;
+  runsByChatId: Map<string, SubagentRunSnapshotV1[]>;
+}
+
+interface CachedSubagentRunDatabaseV1 {
+  database: SubagentRunDatabaseV1;
+  rawBytes?: Buffer;
+  indexes: SubagentRunStoreV1Indexes;
+}
+
+function buildIndexesV1(database: SubagentRunDatabaseV1): SubagentRunStoreV1Indexes {
+  const runsById = new Map<string, SubagentRunSnapshotV1>();
+  const runsByChatId = new Map<string, SubagentRunSnapshotV1[]>();
+  for (const run of database.runs) {
+    runsById.set(run.runId, run);
+    const byChat = runsByChatId.get(run.chatId);
+    if (byChat) byChat.push(run);
+    else runsByChatId.set(run.chatId, [run]);
+  }
+  for (const [chatId, chatRuns] of runsByChatId) {
+    if (chatRuns.length > 1) {
+      runsByChatId.set(chatId, orderedNewestFirst(chatRuns));
+    }
+  }
+  return { runsById, runsByChatId };
 }
 
 class SubagentRunStoreEvidenceError extends Error {
@@ -555,7 +586,7 @@ export function createSubagentRunStore(
   let directoryPromise: Promise<string> | undefined;
   let storagePromise: Promise<SubagentRunStoreStorage> | undefined;
   let generation: SubagentRunStoreGeneration = "missing";
-  let cache: SubagentRunDatabaseV1 | undefined;
+  let cache: CachedSubagentRunDatabaseV1 | undefined;
   const deletedChats = new Map<string, { attempts: Set<symbol>; committed: boolean }>();
   let directorySyncPending = false;
   let stagingCleanupSyncPending = false;
@@ -634,7 +665,8 @@ export function createSubagentRunStore(
     const storageDirectory = await directory();
     const staged = path.join(storageDirectory, `.${STORE_FILE}.${randomUUID()}.tmp`);
     const contents = databaseJson(database);
-    if (Buffer.byteLength(contents, "utf-8") > MAX_SUBAGENT_RUN_STORE_BYTES) {
+    const rawBytes = Buffer.from(contents, "utf-8");
+    if (rawBytes.byteLength > MAX_SUBAGENT_RUN_STORE_BYTES) {
       throw new Error("Subagent run history exceeds the private store limit.");
     }
     if (syncFile) await syncFile(staged);
@@ -661,21 +693,58 @@ export function createSubagentRunStore(
       await syncDirectory(storageDirectory);
       directorySyncPending = false;
     }
-    cache = database;
+    cache = {
+      database,
+      rawBytes,
+      indexes: buildIndexesV1(database),
+    };
   }
 
   async function readNow(
     reconcileActive = false,
     forceDurableRead = false,
-  ): Promise<SubagentRunDatabaseV1> {
+    forceFullRead = false,
+  ): Promise<CachedSubagentRunDatabaseV1> {
     if (directorySyncPending) {
       await (await storage()).syncDirectory();
       await syncDirectory?.(await directory());
       directorySyncPending = false;
     }
-    if (cache && !reconcileActive && !forceDurableRead) return cache;
+    if (cache && !reconcileActive && !forceFullRead) {
+      const storeStorage = await storage();
+      if (!forceDurableRead && storeStorage.stat === undefined) {
+        return cache;
+      }
+      if (!afterRead && storeStorage.stat !== undefined) {
+        let statResult: SubagentRunStoreStatResult | undefined;
+        try {
+          statResult = await storeStorage.stat();
+        } catch (error) {
+          cache = undefined;
+          if (
+            !(error instanceof SubagentRunStoreStorageError) ||
+            error.failure !== "invalid_mode"
+          ) {
+            throw error;
+          }
+        }
+        if (statResult !== undefined) {
+          if (statResult.status === "oversized") {
+            cache = undefined;
+            generation = statResult.generation;
+            throw new SubagentRunStoreEvidenceError();
+          }
+          if (cache !== undefined && statResult.generation === generation) {
+            return cache;
+          }
+          cache = undefined;
+        }
+      }
+    }
     let parsed: unknown;
     let shouldRewrite = false;
+    const previousCache = !reconcileActive && !forceFullRead && !afterRead ? cache : undefined;
+    const previousGeneration = generation;
     // Any durable read supersedes the cache as evidence. If the read or parse
     // fails, no later history path may fall back to snapshots that predate the
     // unreadable on-disk state.
@@ -683,6 +752,10 @@ export function createSubagentRunStore(
     const read = await (await storage()).read();
     generation = read.generation;
     if (read.status === "missing") {
+      if (previousCache && previousGeneration === "missing") {
+        cache = previousCache;
+        return previousCache;
+      }
       parsed = undefined;
     } else if (read.status === "oversized") {
       // The generation proves runs.json exists. Its bytes may contain a
@@ -690,6 +763,15 @@ export function createSubagentRunStore(
       // inferred and the existing inode must not be normalized away.
       throw new SubagentRunStoreEvidenceError();
     } else {
+      if (
+        previousCache &&
+        read.generation === previousGeneration &&
+        previousCache.rawBytes !== undefined &&
+        read.contents.equals(previousCache.rawBytes)
+      ) {
+        cache = previousCache;
+        return previousCache;
+      }
       let decoded: string;
       try {
         decoded = STRICT_UTF8_DECODER.decode(read.contents);
@@ -742,10 +824,15 @@ export function createSubagentRunStore(
     }
     if (reconciled || shouldRewrite) {
       await writeNow(database);
-      return database;
+      return cache!;
     }
-    cache = database;
-    return database;
+    const loaded: CachedSubagentRunDatabaseV1 = {
+      database,
+      ...(read.status === "data" ? { rawBytes: Buffer.from(read.contents) } : {}),
+      indexes: buildIndexesV1(database),
+    };
+    cache = loaded;
+    return loaded;
   }
 
   return {
@@ -754,7 +841,7 @@ export function createSubagentRunStore(
       await serialized(async () => {
         if (restartReconciliationComplete) return;
         await removeCrashStagingFiles();
-        const database = await readNow(true);
+        const { database } = await readNow(true);
         hydratePendingChatDeletions(database);
         restartReconciliationComplete = true;
       });
@@ -767,21 +854,21 @@ export function createSubagentRunStore(
           throw new Error("Subagent history is no longer available for this chat.");
         }
         for (let attempt = 0; attempt <= MAX_NATIVE_GENERATION_CONFLICT_RETRIES; attempt += 1) {
-          // The first pass may use this instance's cache. A rejected native
-          // CAS is retried only from a fresh durable generation, so every
-          // current tombstone, record identity, revision, and capacity limit
-          // participates in the merge.
-          const database = await readNow(false, attempt > 0);
+          // The first pass may use this instance's cache when generation-fenced.
+          // A rejected native CAS is retried only from a fresh durable read, so
+          // every current tombstone, record identity, revision, and capacity
+          // limit participates in the merge.
+          const { database, indexes } = await readNow(false, attempt > 0, attempt > 0);
           hydratePendingChatDeletions(database);
           if (deletedChats.has(snapshot.chatId)) {
             throw new Error("Subagent history is no longer available for this chat.");
           }
-          const existing = database.runs.find((run) => run.runId === snapshot.runId);
+          const existing = indexes.runsById.get(snapshot.runId);
           if (existing && !sameSubagentRunSnapshotIdentity(existing, snapshot)) {
             throw new Error("Subagent run identity cannot change.");
           }
           if (existing && snapshot.revision <= existing.revision) {
-            if (JSON.stringify(snapshot) === JSON.stringify(existing))
+            if (isDeepStrictEqual(snapshot, existing))
               return structuredClone(existing);
             throw new Error("Subagent run revisions must increase monotonically.");
           }
@@ -818,11 +905,11 @@ export function createSubagentRunStore(
       if (!safeLookupId(runId)) return null;
       return serialized(async () => {
         // Another store instance can install a deletion intent after this
-        // instance cached the run. Ordinary private reads therefore require
-        // fresh durable evidence before returning any snapshot.
-        const database = await readNow(false, true);
+        // instance cached the run. Ordinary private reads therefore verify the
+        // durable generation before returning any cached snapshot.
+        const { database, indexes } = await readNow(false, true);
         reconcileTombstonesWithDurableSnapshot(database);
-        const run = database.runs.find((entry) => entry.runId === runId);
+        const run = indexes.runsById.get(runId);
         // Recheck after the asynchronous read: deleteChat() installs its
         // in-memory tombstone synchronously and can cross this read in flight.
         return run && !deletedChats.has(run.chatId) ? structuredClone(run) : null;
@@ -830,14 +917,32 @@ export function createSubagentRunStore(
     },
 
     async listByChat(chatId: string): Promise<SubagentRunSnapshotV1[]> {
-      if (!safeLookupId(chatId)) return [];
+      if (!safeLookupId(chatId)) return markTrustedSubagentRunSnapshotList([]);
       return serialized(async () => {
-        const database = await readNow(false, true);
+        const { database, indexes } = await readNow(false, true);
         reconcileTombstonesWithDurableSnapshot(database);
-        if (deletedChats.has(chatId)) return [];
-        return orderedNewestFirst(database.runs.filter((run) => run.chatId === chatId)).map((run) =>
-          structuredClone(run),
+        if (deletedChats.has(chatId)) return markTrustedSubagentRunSnapshotList([]);
+        const chatRuns = indexes.runsByChatId.get(chatId) ?? [];
+        return markTrustedSubagentRunSnapshotList(
+          chatRuns.map((run) => structuredClone(run)),
         );
+      });
+    },
+
+    async getWithEffectActivity(
+      runId: string,
+      chatId: string,
+    ): Promise<{ snapshot: SubagentRunSnapshotV1; effects: SubagentEffectActivityV1[] } | null> {
+      if (!safeLookupId(runId) || !safeLookupId(chatId)) return null;
+      return serialized(async () => {
+        const { database, indexes } = await readNow(false, true);
+        reconcileTombstonesWithDurableSnapshot(database);
+        const run = indexes.runsById.get(runId);
+        if (!run || run.chatId !== chatId || deletedChats.has(chatId)) return null;
+        return {
+          snapshot: structuredClone(run),
+          effects: [],
+        };
       });
     },
 
@@ -859,7 +964,7 @@ export function createSubagentRunStore(
       try {
         await serialized(async () => {
           try {
-            const database = await readNow();
+            const { database } = await readNow();
             hydratePendingChatDeletions(database);
             if (
               !database.pendingChatDeletions.includes(chatId) &&
@@ -888,7 +993,7 @@ export function createSubagentRunStore(
             // prove that the provisional intent was never installed.
             cache = undefined;
             try {
-              const durable = await readNow(false, true);
+              const { database: durable } = await readNow(false, true, true);
               hydratePendingChatDeletions(durable);
               if (durable.pendingChatDeletions.includes(chatId)) {
                 tombstone.committed = true;
@@ -916,8 +1021,8 @@ export function createSubagentRunStore(
     async pendingChatDeletions(): Promise<string[]> {
       return serialized(async () => {
         // This method controls whether the outer deletion gate reopens after an
-        // error, so cached state is not sufficient evidence.
-        const database = await readNow(false, true);
+        // error, so cached state is verified against the durable generation.
+        const { database } = await readNow(false, true);
         reconcileTombstonesWithDurableSnapshot(database);
         return [...database.pendingChatDeletions];
       });
@@ -927,7 +1032,7 @@ export function createSubagentRunStore(
     async completeChatDeletion(chatId: string): Promise<void> {
       if (!safeLookupId(chatId)) return;
       await serialized(async () => {
-        const database = await readNow();
+        const { database } = await readNow();
         hydratePendingChatDeletions(database);
         const runs = database.runs.filter((run) => run.chatId !== chatId);
         const pendingChatDeletions = database.pendingChatDeletions.filter(

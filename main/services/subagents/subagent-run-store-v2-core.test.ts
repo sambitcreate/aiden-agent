@@ -769,3 +769,192 @@ test("chat deletion blocks active effects and removes terminal effect evidence w
   assert.equal(persisted?.approvals.length, 0);
   assert.deepEqual(persisted?.pendingChatDeletions, ["chat-1"]);
 });
+
+test("generation-fenced secondary indexes serve cached reads via stat, return defensive clones, and reload on external edits or mode drift", async () => {
+  const state = stateWith(database());
+  let reads = 0;
+  let stats = 0;
+  let invalidModeOnce = false;
+  const fencedStorage = (): SubagentRunStoreStorage => {
+    const base = storage(state);
+    return {
+      ...base,
+      async stat() {
+        stats += 1;
+        if (invalidModeOnce) {
+          invalidModeOnce = false;
+          throw new SubagentRunStoreStorageError("invalid_mode");
+        }
+        if (state.contents === undefined) {
+          return { status: "missing", generation: "missing" };
+        }
+        return { status: "data", generation: state.generation as string };
+      },
+      async read() {
+        reads += 1;
+        return base.read();
+      },
+    };
+  };
+
+  const store = createSubagentRunStoreV2(async () => "/private/v2-indexed", {
+    storageFactory: fencedStorage,
+    now: () => 20,
+  });
+  await store.initialize();
+  assert.equal(reads, 1);
+
+  const runA = snapshot({ runId: "run-1", chatId: "chat-1", updatedAt: 20 });
+  const manifestA = manifest();
+  const runB = snapshot({
+    runId: "run-2",
+    childId: "child-2",
+    chatId: "chat-2",
+    updatedAt: 25,
+  });
+  const manifestB: NativeSubagentPrivateRunManifestV2 = {
+    ...manifest(),
+    runId: "run-2",
+    childId: "child-2",
+    chatId: "chat-2",
+    authority: createSubagentAuthorityV2({
+      ...manifest().authority,
+      grantId: "grant-2",
+      runId: "run-2",
+      chatId: "chat-2",
+    }),
+  };
+  await store.upsert(runA, manifestA);
+  await store.upsert(runB, manifestB);
+  await store.prepareEffect(effectInput("tool-indexed"));
+  await store.authorizeEffect(effectOwner("tool-indexed"));
+  await store.markEffectDispatchStarted(effectOwner("tool-indexed"));
+
+  const bgSnapshot = snapshot({
+    runId: "run-bg",
+    childId: "child-bg",
+    chatId: "chat-1",
+    execution: "background",
+    context: "fresh",
+    updatedAt: 15,
+  });
+  const bg = backgroundRecord({
+    runId: "run-bg",
+    childId: "child-bg",
+    chatId: "chat-1",
+    updatedAt: 15,
+  });
+  bg.snapshot = bgSnapshot;
+  bg.manifest = {
+    ...bg.manifest,
+    authority: createSubagentAuthorityV2({
+      ...manifest().authority,
+      grantId: "grant-bg",
+      treeRootId: "run-bg",
+      runId: "run-bg",
+      execution: "background",
+      context: "fresh",
+    }),
+  };
+  assert.equal(await store.background.put(bg, null), true);
+
+  // Writes advanced the cached generation without rereading durable bytes.
+  assert.equal(reads, 1);
+  const statsBeforeReads = stats;
+
+  const gotA = await store.get("run-1");
+  const chat1List = await store.listByChat("chat-1");
+  const combined = await store.getWithEffectActivity("run-1", "chat-1");
+  const crossChatCombined = await store.getWithEffectActivity("run-1", "chat-2");
+  const effectById = await store.getEffect(effectOwner("tool-indexed"));
+  const chatEffects = await store.listEffectsByChat("chat-1");
+  const runEffects = await store.listEffectActivityForRun("run-1", "chat-1");
+  const bgGot = await store.background.get("run-bg");
+  const bgList = await store.background.list();
+
+  assert.equal(reads, 1);
+  assert.equal(stats - statsBeforeReads, 9);
+  assert.deepEqual(gotA, runA);
+  assert.deepEqual(chat1List.map((entry) => entry.runId), ["run-1", "run-bg"]);
+  assert.deepEqual(combined?.snapshot, runA);
+  assert.equal(combined?.effects.length, 1);
+  assert.equal(combined?.effects[0]?.state, "dispatch_started");
+  assert.equal(crossChatCombined, null);
+  assert.equal(effectById?.state, "dispatch_started");
+  assert.equal(chatEffects.length, 1);
+  assert.deepEqual(runEffects, combined?.effects);
+  assert.equal(bgGot?.snapshot.runId, "run-bg");
+  assert.equal(bgList.length, 1);
+
+  // Mutating returned objects or arrays never corrupts cached indexes.
+  gotA!.warnings.push("mutated-warning");
+  chat1List[0]!.label = "mutated-label";
+  chat1List.pop();
+  combined!.snapshot.label = "mutated-combined";
+  combined!.effects[0]!.label = "mutated-effect";
+  bgGot!.events.push({ sequence: 99, at: 99, kind: "transition", state: "completed" });
+  bgList[0]!.snapshot.label = "mutated-bg";
+  assert.deepEqual(await store.get("run-1"), runA);
+  assert.equal((await store.listByChat("chat-1")).length, 2);
+  assert.notEqual((await store.getWithEffectActivity("run-1", "chat-1"))?.effects[0]?.label, "mutated-effect");
+  assert.equal((await store.background.get("run-bg"))?.events.length, 1);
+  assert.equal(reads, 1);
+
+  // External generation advance triggers exactly one full durable reload.
+  const durable = parseMutableSubagentRunDatabaseV2(JSON.parse(state.contents ?? "null"))!;
+  durable.storeRevision += 1;
+  durable.snapshots = durable.snapshots.map((entry) =>
+    entry.runId === "run-2"
+      ? { ...entry, revision: 2, label: "Externally updated", updatedAt: 40 }
+      : entry,
+  );
+  state.counter += 1;
+  state.generation = `${state.counter.toString(16)}-1-1-1-1-1-1-1-1`;
+  state.contents = `${JSON.stringify(durable, null, 2)}\n`;
+
+  assert.equal((await store.get("run-2"))?.label, "Externally updated");
+  assert.equal(reads, 2);
+  assert.equal((await store.get("run-2"))?.label, "Externally updated");
+  assert.equal(reads, 2);
+
+  // Permissive mode drift reported by stat falls back to read() to repair and reload.
+  invalidModeOnce = true;
+  assert.equal((await store.get("run-2"))?.label, "Externally updated");
+  assert.equal(reads, 3);
+});
+
+test("storage doubles without stat fall back to generation-checked read calls", async () => {
+  const state = stateWith(database([snapshot()], [manifest()]));
+  let reads = 0;
+  const base = storage(state);
+  const store = createSubagentRunStoreV2(async () => "/private/v2-no-stat", {
+    storageFactory: () => ({
+      ...base,
+      async read() {
+        reads += 1;
+        return base.read();
+      },
+    }),
+    now: () => 20,
+  });
+  await store.initialize();
+  assert.equal(reads, 1);
+  assert.equal((await store.get("run-1"))?.runId, "run-1");
+  assert.equal((await store.getWithEffectActivity("run-1", "chat-1"))?.snapshot.runId, "run-1");
+  assert.equal(reads, 3);
+});
+
+test("authority digest caches frozen authorities without colliding distinct grants", () => {
+  const first = manifest().authority;
+  const second = createSubagentAuthorityV2({
+    ...first,
+    grantId: "grant-distinct",
+  });
+  const digest1 = subagentAuthorityDigestV2(first);
+  const digest2 = subagentAuthorityDigestV2(first);
+  const digestDistinct = subagentAuthorityDigestV2(second);
+  const uncachedClone = structuredClone(first);
+  assert.equal(digest1, digest2);
+  assert.equal(subagentAuthorityDigestV2(uncachedClone), digest1);
+  assert.notEqual(digest1, digestDistinct);
+});
