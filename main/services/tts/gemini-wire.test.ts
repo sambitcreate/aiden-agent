@@ -4,7 +4,6 @@ import {
   buildTtsInteractionBody,
   classifyTtsProviderError,
   parseUnarySynthesisResponse,
-  parseVoicesListResponse,
   validateWavContainer,
   TtsWireError,
   TTS_STARTER_PREBUILT_VOICES,
@@ -242,29 +241,6 @@ test("provider errors collapse onto the closed union without leaking details", (
       !classified.message.includes("123") && !classified.message.includes("SECRET"),
     );
   }
-});
-
-test("voice list parsing normalizes page tokens and kinds", () => {
-  const page = parseVoicesListResponse({
-    voices: [
-      { id: "voices/abc123", display_name: "My voice", type: "prompted" },
-      { id: "voices/rep-1", display_name: "Cloned", type: "replicated" },
-      { name: "Kore", type: "prebuilt" },
-      { id: "" },
-      "not-a-voice",
-    ],
-    next_page_token: "tok-2",
-  });
-  assert.equal(page.voices.length, 3);
-  assert.deepEqual(page.voices[0], {
-    providerVoiceId: "voices/abc123",
-    name: "My voice",
-    kind: "prompted",
-  });
-  assert.equal(page.nextPageToken, "tok-2");
-
-  const last = parseVoicesListResponse({ voices: [], next_page_token: "" });
-  assert.equal(last.nextPageToken, null);
 });
 
 test("starter prebuilt voices are unique and valid", () => {

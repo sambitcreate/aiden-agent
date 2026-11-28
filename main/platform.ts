@@ -30,7 +30,6 @@ import {
   createBroadcastReceivers,
   parseMediaRequestType,
   parseMediaStatusType,
-  parseOpenDialogOptions,
 } from "./native-ipc-core.js";
 import { rendererDocumentOwner } from "./services/renderer-document-owner.js";
 
@@ -155,15 +154,6 @@ function requireNativeSender(event: IpcMainInvokeEvent): void {
 export function registerNativeHandlers(): void {
   if (nativeHandlersRegistered) return;
   nativeHandlersRegistered = true;
-
-  electronIpcMain.handle("aiden:dialog:open", async (event, input?: unknown) => {
-    requireNativeSender(event);
-    const options = parseOpenDialogOptions(input);
-    const parent = BrowserWindow.fromWebContents(event.sender);
-    return parent
-      ? dialog.showOpenDialog(parent, options)
-      : dialog.showOpenDialog(options);
-  });
 
   electronIpcMain.handle("aiden:theme:get", () => ({
     themeSource: nativeTheme.themeSource,

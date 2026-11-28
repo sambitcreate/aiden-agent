@@ -22,7 +22,6 @@ test("Web Search IPC has one fenced, registry-backed channel surface", async () 
 
   for (const channel of [
     "webSearch:get",
-    "webSearch:existingAuth:get",
     "webSearch:existingAuth:consent",
     "webSearch:existingAuth:revoke",
     "webSearch:setEnabled",
@@ -53,7 +52,6 @@ test("preload and renderer IPC expose only the generic Web Search contract", asy
   assert.match(preloadChannels, /"webSearch:"/u);
   for (const channel of [
     "webSearch:get",
-    "webSearch:existingAuth:get",
     "webSearch:existingAuth:consent",
     "webSearch:existingAuth:revoke",
     "webSearch:setEnabled",

@@ -43,7 +43,6 @@ test("the overlay bridge passes allowed channels through and refuses everything 
     "browser:navigate",
     "bots:delete",
     "bots:update",
-    "aiden:dialog:open",
     "attachments:pickAndRead",
     "chat:start",
     "remote:pair",

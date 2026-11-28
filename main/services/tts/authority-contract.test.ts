@@ -32,12 +32,8 @@ test("every TTS IPC handler validates the active renderer document", () => {
   const channels = [...handlers.matchAll(/ipcMain.handle\("(tts:[^"]+)"/gu)].map(
     (match) => match[1]!,
   );
-  assert.ok(channels.length >= 14);
+  assert.ok(channels.length >= 12);
   for (const channel of channels) assert.match(handler(channel), /owner\(event\)/u, channel);
-  assert.match(
-    handler("tts:voices:list"),
-    /asNonEmptyString\(request.pageToken, "voice page token", 2048\)/u,
-  );
 });
 
 test("credential mutations retain the document fence through the secret-store transaction", () => {

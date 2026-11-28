@@ -2543,7 +2543,6 @@ test("a repeated approval requests Always truthfully, preserves the draft and Ma
     "bots:live:subscribe": () => snapshot(),
     "bots:pendingApprovals": () => [],
     "bots:approve": () => new Promise((resolve) => { release = resolve; }),
-    "bots:allowed:list": () => [],
   });
   const { router } = await mountWithBotRouter(<BotChatRoute botId="bot-1" />, { initialPath: "/bots/bot-1/chat" });
   const box = await screen.findByPlaceholderText("Ask Planner") as HTMLTextAreaElement;
@@ -2577,7 +2576,7 @@ test("the first approval card already offers Always allow, without a repeat note
   const USABLE = [{ id: "openai", models: ["fast"], hasKey: true, needsKey: true }];
   const calls = await mountChat({
     "bots:live:subscribe": () => snapshot(), "bots:pendingApprovals": () => [],
-    "bots:approve": () => ({ decided: true }), "bots:allowed:list": () => [],
+    "bots:approve": () => ({ decided: true }),
     "settings:get": () => ({ approvalMode: "ask" }), "providers:list": () => USABLE,
   });
   act(() => emitBotTestNotification("bots:approval", { botId: "bot-1", waitId: "first-1", toolCallId: "call-a", toolName: "composio", summary: "Composio · Gmail: Send email", always: { key: "k", count: 0 }, autoWouldJudge: true }));

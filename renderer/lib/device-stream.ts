@@ -942,7 +942,9 @@ export function createDeviceStreamClient(
     const ws = runtime.createSocket(wsUrl(`/helper/ws?device=${device}`));
     ws.binaryType = "arraybuffer";
     socket = ws;
+    let opened = false;
     ws.onopen = () => {
+      opened = true;
       if (stopped || socket !== ws) return;
       ws.send(taggedJson(IOS_MSG_HARDWARE_KEYBOARD, { enabled: false }));
       events.onInputConnected(true);
@@ -978,7 +980,7 @@ export function createDeviceStreamClient(
         // Ignore malformed frames.
       }
     };
-    ws.onclose = (event) => {
+    const onSocketClose = (event: { code: number; reason: string }) => {
       if (socket !== ws) return;
       socket = null;
       duoControl.clear();
@@ -991,7 +993,12 @@ export function createDeviceStreamClient(
       if (refusedGrant(event.code)) return handleUnauthorized();
       scheduleRetry("input", () => void connectInput());
     };
-    ws.onerror = () => ws.close();
+    ws.onclose = onSocketClose;
+    ws.onerror = () => {
+      ws.onerror = null;
+      ws.close();
+      if (!opened) onSocketClose({ code: 1006, reason: "" });
+    };
   };
 
   // Android: one socket for video down and gestures up.
@@ -1000,7 +1007,9 @@ export function createDeviceStreamClient(
     const ws = runtime.createSocket(wsUrl(`/ws?device=${device}&frame-meta=1`));
     ws.binaryType = "arraybuffer";
     socket = ws;
+    let opened = false;
     ws.onopen = () => {
+      opened = true;
       if (stopped || socket !== ws) return;
       connecting();
       events.onInputConnected(true);
@@ -1041,7 +1050,7 @@ export function createDeviceStreamClient(
       }
       decode(isKey, packet.data, packet.timestamp);
     };
-    ws.onclose = (event) => {
+    const onSocketClose = (event: { code: number; reason: string }) => {
       if (socket !== ws) return;
       socket = null;
       closeDecoder();
@@ -1052,7 +1061,12 @@ export function createDeviceStreamClient(
       connecting(event.reason || undefined);
       scheduleRetry("input", connectAndroid);
     };
-    ws.onerror = () => ws.close();
+    ws.onclose = onSocketClose;
+    ws.onerror = () => {
+      ws.onerror = null;
+      ws.close();
+      if (!opened) onSocketClose({ code: 1006, reason: "" });
+    };
   };
 
   const start = () => {
@@ -1091,7 +1105,10 @@ export function createDeviceStreamClient(
     controller = null;
     const discarded = socket;
     socket = null;
-    discarded?.close();
+    if (discarded) {
+      discarded.onerror = null;
+      discarded.close();
+    }
     duoControl.clear();
     rotationCursor = null;
     duoPanels.stop();

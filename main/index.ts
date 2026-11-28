@@ -1564,18 +1564,6 @@ async function restoreDockIconPreference(
   }
 }
 
-ipcMain.handle("app:setDockIcon", async (event, value: unknown) => {
-  if (
-    !mainWindow ||
-    mainWindow.isDestroyed() ||
-    event.sender.id !== mainWindow.webContents.id
-  )
-    return false;
-  if (value !== "aiden" && value !== "monochrome")
-    throw new Error("Invalid Dock icon preference.");
-  return applyDockIconPreference(value);
-});
-
 // The Inbox switch and view, reported by the main window only.
 registerInboxDockBadgeIpc({
   isMainWindow: (event) =>

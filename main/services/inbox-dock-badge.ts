@@ -196,8 +196,8 @@ export interface InboxBadgeRequestIpc<Event> {
 /**
  * `app:setInboxDockBadge(enabled)`: a window reports whether the badge should
  * show (the Inbox is the sidebar view and its switch is on). The latest report
- * wins. Only the main window reports, as for `app:setDockIcon`; any other
- * sender is ignored and leaves the request as it was.
+ * wins. Only the main window reports; any other sender is ignored and leaves
+ * the request as it was.
  */
 export function registerInboxBadgeRequest<Event>(
   ipc: InboxBadgeRequestIpc<Event>,

@@ -174,7 +174,6 @@ import type {
   WebSearchRouteEntry,
   WebSearchSelection,
   WebSearchExistingAuthConsentRequest,
-  WebSearchExistingAuthRendererSnapshot,
 } from "./types";
 import type { OnboardingOutcome, OnboardingSnapshot } from "../shared/onboarding";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
@@ -230,7 +229,7 @@ import type {
   ChatRunInputMode,
 } from "../shared/chat-run-input";
 import type { ToolApprovalDetails } from "../shared/assistant";
-import type { ToolApprovalRuleView, ToolApprovalScope } from "../shared/tool-approval-scope";
+import type { ToolApprovalScope } from "../shared/tool-approval-scope";
 import type { ToolApprovalPreview } from "../shared/tool-approval-preview";
 import type { CommandReading } from "../shared/command-reading";
 import type { SubagentRunSnapshot } from "../shared/subagent-runs";
@@ -480,8 +479,6 @@ export const appApi = {
     invoke<boolean>("app:setMenuCommands", [...commandIds]),
   setCloseGuard: (guard: { dirty: boolean; gitBusy: boolean; path?: string; saving: boolean }) =>
     invoke<boolean>("app:setCloseGuard", guard),
-  setDockIcon: (preference: "aiden" | "monochrome") =>
-    invoke<boolean>("app:setDockIcon", preference),
   /** Whether the app icon shows the Inbox's Needs you count; main does the counting. */
   setInboxDockBadge: (enabled: boolean) => invoke<void>("app:setInboxDockBadge", enabled),
 };
@@ -916,8 +913,6 @@ export const storageApi = {
 // ── Web Search provider registry ─────────────────────────────────────
 export const webSearchApi = {
   get: () => invoke<WebSearchRendererSnapshot>("webSearch:get"),
-  getExistingAuth: () =>
-    invoke<WebSearchExistingAuthRendererSnapshot>("webSearch:existingAuth:get"),
   consentExistingAuth: (request: WebSearchExistingAuthConsentRequest) =>
     invoke<WebSearchRendererSnapshot>("webSearch:existingAuth:consent", request),
   revokeExistingAuth: () => invoke<WebSearchRendererSnapshot>("webSearch:existingAuth:revoke"),
@@ -2003,12 +1998,6 @@ export const chatsApi = {
     decision: ApprovalDecision,
     options?: { formFillExcludedOrders?: number[]; scope?: ToolApprovalScope },
   ) => invoke<void>("chat:approve", approvalId, decision, options),
-  /** Persisted "always allow" rules, newest first. */
-  listApprovalRules: () => invoke<ToolApprovalRuleView[]>("chat:listApprovalRules"),
-  revokeApprovalRule: (id: string) =>
-    invoke<{ revoked: boolean }>("chat:revokeApprovalRule", id),
-  revokeAllApprovalRules: () =>
-    invoke<{ revoked: number }>("chat:revokeAllApprovalRules"),
   answerQuestionnaire: (promptId: string, response: AskUserQuestionResponseV1) =>
     invoke<{ status: AskUserQuestionAnswerStatus } | undefined>(
       "chat:answerQuestionnaire",
@@ -2024,13 +2013,6 @@ export const botsApi = {
   /** Accepts Full access unless the person chose to review it first, in one step in main. */
   acceptFirstBotAccess: (acknowledgement: BotNoticeAcknowledgement) =>
     invoke<BotNoticeStatus>("bots:acceptFirstBotAccess", acknowledgement),
-  getTelegramAccessNotice: (profile: string) =>
-    invoke<BotNoticeStatus>("bots:getTelegramAccessNotice", profile),
-  acknowledgeTelegramAccessNotice: (profile: string, acknowledgement: BotNoticeAcknowledgement) =>
-    invoke<BotNoticeStatus>("bots:acknowledgeTelegramAccessNotice", {
-      profile,
-      acknowledgement,
-    }),
   list: (includeArchived = false) => invoke<BotDefinition[]>("bots:list", includeArchived),
   get: (id: string) => invoke<BotDefinition | null>("bots:get", id),
   getCanonicalPhoto: (id: string) =>
@@ -2076,12 +2058,6 @@ export const botsApi = {
   /** Answer a Bot tool approval by its wait id; the first answer wins. */
   approve: (waitId: string, decision: "allow" | "deny", scope?: "always") =>
     invoke<{ decided: boolean }>("bots:approve", { waitId, decision, ...(scope === undefined ? {} : { scope }) }),
-  allowedList: (botId?: string) =>
-    invoke<import("../shared/tool-approval-scope").BotAllowedEntry[]>("bots:allowed:list", botId === undefined ? {} : { botId }),
-  removeAllowed: (botId: string, entryId: string) =>
-    invoke<{ removed: boolean }>("bots:allowed:remove", { botId, entryId }),
-  onAllowedChanged: (handler: (payload: { botId: string }) => void) =>
-    onNotification("bots:allowed:changed", handler),
   /**
    * Answer the Bot's A–E question by its wait id; `answered` is false once the
    * question is no longer waiting (answered elsewhere or withdrawn).
@@ -2327,26 +2303,8 @@ export const subagentsApi = {
     }
     return result;
   },
-  status: (chatId: string, runId: string) =>
-    subagentsApi.manage(chatId, { version: 2, action: "status", runId }),
-  wait: (chatId: string, runId: string, timeoutMs: number) =>
-    subagentsApi.manage(chatId, {
-      version: 2,
-      action: "wait",
-      runId,
-      timeoutMs,
-    }),
   stop: (chatId: string, runId: string) =>
     subagentsApi.manage(chatId, { version: 2, action: "stop", runId }),
-  retry: (chatId: string, runId: string) =>
-    subagentsApi.manage(chatId, { version: 2, action: "retry", runId }),
-  steer: (chatId: string, runId: string, instruction: string) =>
-    subagentsApi.manage(chatId, {
-      version: 2,
-      action: "steer",
-      runId,
-      instruction,
-    }),
 };
 
 // ── Streaming generation ──────────────────────────────────────────────
@@ -2698,8 +2656,6 @@ export const ttsApi = {
       };
       job: TtsJobSnapshot | null;
     }>("tts:status", chatId ? { chatId } : {}),
-  getSettings: () =>
-    invoke<{ settings: TtsSettings; settingsRevision: string }>("tts:settings:get"),
   updateSettings: (expectedRevision: string, patch: unknown) =>
     invoke<{ settings: TtsSettings; settingsRevision: string }>(
       "tts:settings:update",
@@ -2712,11 +2668,6 @@ export const ttsApi = {
     invoke<Array<{ providerVoiceId: string; name: string; kind: "prebuilt" }>>(
       "tts:voices:starter",
     ),
-  listVoices: (pageToken?: string) =>
-    invoke<{
-      voices: Array<{ providerVoiceId: string; name: string; kind: "prebuilt" | "prompted" | "replicated" }>;
-      nextPageToken: string | null;
-    }>("tts:voices:list", pageToken ? { pageToken } : undefined),
   preview: () =>
     invoke<
       | { ok: true; snapshot: TtsJobSnapshot }

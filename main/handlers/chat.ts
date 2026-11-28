@@ -16,7 +16,6 @@ import type { AskUserQuestionAnswerStatus } from "../../renderer/shared/ask-user
 import { parseParams } from "./chat-params.js";
 import { geminiLiveService } from "../services/gemini-live/service-main.js";
 import { parseToolApprovalScope } from "../../renderer/shared/tool-approval-scope.js";
-import { toolApprovalRules } from "../services/tool-approval-rules-main.js";
 import {
   parseClaimHandoffRequest,
   type ClaimedDesktopHandoff,
@@ -180,20 +179,6 @@ export function registerChatGenerationHandlers(): void {
       }
     },
   );
-
-  // Remembered "always allow" tool approval rules (Settings → Approvals).
-  ipcMain.handle("chat:listApprovalRules", async () => toolApprovalRules.list());
-
-  ipcMain.handle("chat:revokeApprovalRule", async (_event, ruleId: unknown) => {
-    if (typeof ruleId !== "string" || !/^[A-Za-z0-9_-]{1,64}$/u.test(ruleId)) {
-      throw new Error("Invalid approval rule.");
-    }
-    return { revoked: await toolApprovalRules.revoke(ruleId) };
-  });
-
-  ipcMain.handle("chat:revokeAllApprovalRules", async () => ({
-    revoked: await toolApprovalRules.revokeAll(),
-  }));
 
   ipcMain.handle(
     "chat:answerQuestionnaire",
