@@ -101,7 +101,7 @@ test("a failed save puts the mode back", async () => {
 test("on Linux the modes and What changed name the computer, not a Mac", async () => {
   mount({ approvalMode: "ask", approvalModeOrigin: "upgrade" }, [MODEL], { platform: "linux" });
   const group = await modeGroup();
-  within(group).getByText(/the first use of your computer\. Only Block rules apply/u);
+  within(group).getByText(/First commands on your computer/u);
   const note = await screen.findByRole("note", { name: "What changed" });
   within(note).getByText(/one mode for this computer/u);
   assert.equal(screen.queryByText(/\bMac\b/u), null);
@@ -252,13 +252,13 @@ const workspace = (fields: Partial<Workspace> = {}): Workspace => ({
 
 test("a workspace follows the global mode until customized", async () => {
   mountWorkspace(workspace(), { approvalMode: "never" });
-  await screen.findByText(/^Follows Settings → Approvals\. Asks only before purchases/u);
+  await screen.findByText(/^Follows Settings → Approvals\. Writes and edits workspace files without asking/u);
   assert.match(screen.getByRole("combobox", { name: "Approvals in this workspace" }).textContent ?? "", /Use Settings \(Never ask\)/u);
 });
 
-test("on Linux a workspace on Never ask names the computer whose first use still asks", async () => {
+test("on Linux a workspace on Never ask explains file writes and names the computer for commands", async () => {
   mountWorkspace(workspace(), { approvalMode: "never" }, "linux");
-  await screen.findByText(/^Follows Settings → Approvals\. .*the first use of your computer\./u);
+  await screen.findByText(/^Follows Settings → Approvals\. Writes and edits workspace files without asking\. First commands on your computer/u);
 });
 
 test("a Full workspace reads as Never ask with commands and file changes allowed, each removable", async () => {

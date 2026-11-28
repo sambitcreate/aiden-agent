@@ -48,6 +48,8 @@ The installer selects the native package for your machine, checks its published 
 2. **Finish setup**—Aiden creates your first Bot (**Chief**) with **Full access** (accepted when you click **Start using Aiden**, and narrowable anytime in Chief's **Advanced** tab), lets you choose your anonymous usage-data setting, and offers a quick feature tour.
 3. **Open a chat or workspace**—start in **Chief**'s chat, open a project folder, or adjust approval modes (`Auto`, `Ask`, `Never ask`) and rules anytime in **Settings → Approvals**.
 
+In **Never ask**, Aiden writes and edits workspace files without a first-use prompt. Commands still need workspace permission. Block rules and hooks that require approval still apply.
+
 ## What you get
 
 - **Workspaces, Git, and follow-through** — Work inside folder workspaces (`Work in this folder` or `Chat only`), scratch workspaces, [No workspace](docs/no-workspace-chats.md) chats, or isolated Git worktrees under `Auto`, `Ask`, or `Never ask` approval modes. Inspect diffs, run a terminal beside the chat, delegate up to four native subagents per call (up to eight per reply) and open each one's own [helper chat](docs/helpers.md), and use `/follow` or `/until` so Aiden watches PR checks, review-bot comments, and failing tests, or promises to check back in a chat later ([coding follow-through](docs/coding-follow-through.md)). Give a chat a goal with `/goal` and Aiden [keeps going in rounds](docs/keep-going-goals.md) until it's done or needs you; let a chat [start and follow other chats](docs/chats-that-run-chats.md), each in its own worktree if you like; and have a task made in a chat post its runs there or [run when a page or script changes](docs/scheduled-task-triggers.md). The computer stays awake while Aiden works.

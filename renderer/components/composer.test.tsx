@@ -438,6 +438,10 @@ test("a customized workspace shows its mode, and Use Settings hands it back to t
     "Approvals: Ask",
     "Approvals: Never ask (on)",
   ]);
+  assert.ok(screen.getByRole("radio", {
+    name: "Approvals: Never ask",
+    description: "Writes and edits workspace files without asking. First commands still need permission.",
+  }));
   fireEvent.click(screen.getByRole("radio", { name: "Approvals: Ask" }));
   // Choices wait while a change is saving.
   await waitFor(() => assert.equal(screen.getByRole("button", { name: /^Approvals:/u }).textContent, "Never ask"));

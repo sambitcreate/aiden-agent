@@ -56,6 +56,7 @@ import {
   approvalDetailsHeadline,
   approvalFilePath,
   approvalHeadline,
+  approvalMacPart,
   toolLabel,
 } from "../shared/approval-card-model";
 
@@ -268,7 +269,7 @@ function rememberScopeHint(
     const reach =
       pending.toolName === "computer_use"
         ? "using your Mac with Computer Use"
-        : pending.toolName === "run_command" || pending.preview?.kind === "command"
+        : approvalMacPart(pending) === "shell"
           ? "running commands"
           : "changing files";
     return `Won't ask again before ${reach} in this workspace. Remove it in Workspace settings.`;
@@ -517,6 +518,9 @@ function ApprovalCardBody({
     );
   }
   const summaryId = `approval-summary-${pending.approvalId}`;
+  const workspaceGrantNoteId = pendingRememberScopes.includes("workspace")
+    ? `approval-workspace-grant-${pending.approvalId}`
+    : undefined;
   // A helper's or a Bot's card is named for who asked, so it reads as theirs
   // when Go to approval moves focus onto it; Aiden's own keeps its question.
   const requestedBy =
@@ -551,7 +555,7 @@ function ApprovalCardBody({
       aria-labelledby={
         requestedBy ? `${requestedById} approval-title-${pending.approvalId}` : `approval-title-${pending.approvalId}`
       }
-      aria-describedby={summaryId}
+      aria-describedby={workspaceGrantNoteId ? `${summaryId} ${workspaceGrantNoteId}` : summaryId}
       className={cn(
         // The chat's footer gives the card only the room the composer leaves. A
         // schedule review shrinks first; past that, the card scrolls from its question.
@@ -641,6 +645,11 @@ function ApprovalCardBody({
                     ? scheduleApprovalFooter(platform)
                     : approvalMeta(plainPreview, requester)}
       </Text>
+      {workspaceGrantNoteId ? (
+        <Text id={workspaceGrantNoteId} variant="small" color="secondary" as="p" className="mt-1 shrink-0 text-center text-pretty">
+          This action needs workspace permission. To allow future actions of this type, choose Allow in this workspace.
+        </Text>
+      ) : null}
       {notes.map((note) => (
         <Text key={note} variant="small" color="tertiary" as="p" className="mt-1 shrink-0 text-center text-pretty">
           {note}

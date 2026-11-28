@@ -28,7 +28,7 @@ enum AidenApprovalSettingsCopy {
         switch mode {
         case .auto: "A model approves routine actions and asks you about the rest."
         case .ask: "Asks before sending, spending or changing anything."
-        case .never: "Asks only before purchases, sharing your data and the first use of your computer. Only Block rules apply."
+        case .never: "Writes and edits workspace files without asking. First commands on your computer, Computer Use and actions such as purchases can still ask. Block rules and approval hooks apply."
         }
     }
 

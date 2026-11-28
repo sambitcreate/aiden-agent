@@ -2958,6 +2958,7 @@ export function Composer({
   const ApprovalsIcon = APPROVAL_CHOICE_ICONS[chipChoice].icon;
   const approvalsHelp =
     chipChoice === "chat-only" ? "The agent can't read or change this folder." : approvalModeHelp(chipChoice, localComputerNoun(platform));
+  const neverAskDescriptionId = `${permissionOptionsId}-never-description`;
   const folderName = noWorkspace
     ? NO_WORKSPACE_LABEL
     : workspace?.folderPath
@@ -3662,6 +3663,7 @@ export function Composer({
                                 ? `Approvals: ${label}. Finish or stop the current response to change approvals.`
                                 : `Approvals: ${label}`
                           }
+                          aria-describedby={value === "never" && !noWorkspace ? neverAskDescriptionId : undefined}
                           title={value === "settings" || value === "chat-only" ? undefined : approvalModeHelp(value, localComputerNoun(platform))}
                           tabIndex={selected ? 0 : -1}
                           aria-disabled={disabled || undefined}
@@ -3699,14 +3701,21 @@ export function Composer({
                             radios?.[nextIndex]?.focus();
                           }}
                           className={cn(
-                            "flex h-8 w-full items-center gap-2 overflow-hidden whitespace-nowrap rounded-control px-3 text-regular outline-none transition-[background-color,box-shadow,color] duration-100 ease-out focus-visible:outline-none aria-disabled:cursor-default",
+                            "flex min-h-8 flex-none items-start gap-2 rounded-control px-3 py-1.5 text-left text-regular outline-none transition-[background-color,box-shadow,color] duration-100 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring aria-disabled:cursor-default",
                             selected
                               ? "bg-popover shadow-control"
                               : "hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection",
                           )}
                         >
-                          <Icon className={cn("size-4 shrink-0", meta.className)} />
-                          <span className="truncate">{label}</span>
+                          <Icon className={cn("mt-0.5 size-4 shrink-0", meta.className)} />
+                          <span className="min-w-0">
+                            <span className="block truncate">{label}</span>
+                            {value === "never" && !noWorkspace ? (
+                              <Text id={neverAskDescriptionId} as="span" variant="small" color="secondary" className="block w-44 text-pretty">
+                                Writes and edits workspace files without asking. First commands still need permission.
+                              </Text>
+                            ) : null}
+                          </span>
                         </button>
                       );
                     })}

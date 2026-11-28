@@ -77,7 +77,7 @@ A turn an app starts is approved exactly like a turn the person types in that wo
 
 - **Ask:** anything that sends, spends or changes something waits for the person. Only what the workspace's grants allow (running commands, changing files, Computer Use) runs without a card.
 - **Auto:** a model approves routine actions and the rest wait for the person. A Supervised app's turn can therefore run routine tools with nobody watching.
-- **Never ask:** only purchases, sharing the person's data and the first use of the computer wait for the person. Everything else runs unattended.
+- **Never ask:** the built-in write and edit tools can change files within the workspace from their first use. Block rules and approval hooks still apply. First commands and screenshot saves still need workspace permission, and the host card can save it with **Allow in this workspace**. Actions such as sharing data or creating a scheduled task still ask.
 - **Chat only** workspaces cannot read or change their folder in any mode.
 
 `aiden_workspace_list` reports each workspace's `toolPermission` as the same tier a phone sees (`legacyWorkspaceTier`): `none` for Chat only, `ask` for Ask with nothing allowed in the workspace, and `full` whenever something can run without a card (Auto, Never ask, or any grant). A well-behaved app that should not run tools unattended can start turns only where `toolPermission` is `ask`, but Aiden does not enforce that for it.
