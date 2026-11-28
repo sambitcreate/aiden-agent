@@ -114,7 +114,7 @@ export class DataStore<T> {
   /** Predecessor names created by this process remain live until next startup. */
   private readonly liveHeldFiles = new Set<string>();
   /** Only this store’s active atomic publication may temporarily give its inode two names. */
-  private ownedPublicationPaths: string[] = [];
+  private readonly ownedPublicationPaths: string[] = [];
   /** Exact bytes observed by the last load; null means the file was absent. */
   private diskSnapshot: Buffer | null | undefined;
   /** True when load() fell back to defaults because the file would not parse. */
@@ -292,6 +292,7 @@ export class DataStore<T> {
     destination: string,
     preserveConflict: boolean,
   ): Promise<void> {
+    const addedOwned: string[] = [];
     try {
       const info = await fs.lstat(held);
       if (info.isSymbolicLink()) {
@@ -305,6 +306,12 @@ export class DataStore<T> {
           preserveTimestamps: true,
         });
       } else {
+        for (const candidate of [destination, held]) {
+          if (!this.ownedPublicationPaths.includes(candidate)) {
+            this.ownedPublicationPaths.push(candidate);
+            addedOwned.push(candidate);
+          }
+        }
         await fs.link(held, destination);
       }
       await fs.rm(held, { recursive: info.isDirectory(), force: true });
@@ -318,6 +325,11 @@ export class DataStore<T> {
         await fs.rename(held, `${destination}.conflict-${randomUUID()}`);
       } else {
         await fs.rm(held, { recursive: true, force: true });
+      }
+    } finally {
+      for (const candidate of addedOwned) {
+        const index = this.ownedPublicationPaths.indexOf(candidate);
+        if (index !== -1) this.ownedPublicationPaths.splice(index, 1);
       }
     }
   }
@@ -523,7 +535,12 @@ export class DataStore<T> {
       path.dirname(destination),
       `.${path.basename(destination)}.${randomUUID()}.tmp`,
     );
-    this.ownedPublicationPaths = [destination, staged];
+    this.ownedPublicationPaths.splice(
+      0,
+      this.ownedPublicationPaths.length,
+      destination,
+      staged,
+    );
     try {
       await fs.writeFile(staged, serialized, {
         encoding: "utf-8",
@@ -570,7 +587,7 @@ export class DataStore<T> {
       this.options.afterWritePublish?.(previous, data);
     } finally {
       await fs.rm(staged, { force: true }).catch(() => undefined);
-      this.ownedPublicationPaths = [];
+      this.ownedPublicationPaths.length = 0;
     }
   }
 
