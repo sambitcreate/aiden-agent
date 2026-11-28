@@ -6,10 +6,9 @@
  * side questions, title prompts, CLI forks) drops these messages.
  */
 
-/** The display-only record that a hook stopped this user message. */
-export interface HookBlockedPromptV1 {
-  reason: string;
-}
+import type { HookBlockedPromptV1 } from "../../renderer/shared/ipc-chat-schedule-contracts.js";
+
+export type { HookBlockedPromptV1 };
 
 const MAX_HOOK_BLOCKED_REASON_CHARS = 500;
 

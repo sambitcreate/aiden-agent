@@ -20,9 +20,14 @@ import {
   isCodexThinkingLevel,
   type CodexThinkingLevel,
 } from "../../renderer/shared/codex-thinking.js";
+import {
+  OPENAI_CODEX_PROVIDER_ID,
+  type CodexModelSummary,
+  type CodexProviderSnapshot,
+} from "../../renderer/shared/ipc-provider-contracts.js";
 import type { ModelInfo } from "./types.js";
 
-export const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+export { OPENAI_CODEX_PROVIDER_ID, type CodexModelSummary, type CodexProviderSnapshot };
 export const OPENAI_CODEX_PROVIDER_LABEL = "ChatGPT / Codex";
 export const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 
@@ -42,28 +47,6 @@ export class CodexRuntimeError extends Error {
   ) {
     super(message);
   }
-}
-
-export interface CodexModelSummary {
-  id: string;
-  name: string;
-  api: "openai-codex-responses";
-  reasoning: boolean;
-  vision: boolean;
-  contextWindow: number;
-  maxTokens: number;
-  thinkingLevels: CodexThinkingLevel[];
-}
-
-export interface CodexProviderSnapshot {
-  id: typeof OPENAI_CODEX_PROVIDER_ID;
-  name: string;
-  authName: string;
-  /** Configuration-only status. Request-time refresh may still require re-login. */
-  configured: boolean;
-  /** Set only after request-time auth resolution proves the stored sign-in needs repair. */
-  needsAttention: boolean;
-  models: CodexModelSummary[];
 }
 
 export interface PreparedCodexIsolatedStream {

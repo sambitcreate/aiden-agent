@@ -8,6 +8,10 @@ import {
   isGenerationThinkingLevel,
   type GenerationThinkingLevel,
 } from "../../../renderer/shared/generation-thinking.js";
+import type {
+  SubagentModelRoleSetting,
+  SubagentModelSettings,
+} from "../../../renderer/shared/ipc-settings-usage-contracts.js";
 import type { SubagentModelSelectionSource } from "../../../renderer/shared/subagent-runs.js";
 import { isSubagentRole, type SubagentRole } from "./capability-profile.js";
 import { canDispatchSubagentModel } from "./eligibility.js";
@@ -17,31 +21,13 @@ export const MAX_SUBAGENT_MODEL_CHOICES = 6;
 const MAX_MODEL_KEY_LENGTH = 320;
 const SAFE_KEY = /^[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+$/u;
 
-export type { SubagentModelSelectionSource };
+export type { SubagentModelRoleSetting, SubagentModelSelectionSource, SubagentModelSettings };
 
 export interface SubagentModelCandidate {
   providerId: string;
   providerLabel: string;
   modelId: string;
   modelLabel: string;
-}
-
-export interface SubagentModelRoleSetting {
-  model?: string;
-  effort?: GenerationThinkingLevel;
-  /** A locked role ignores spawn arguments and applies after every default. */
-  locked?: boolean;
-}
-
-/** Optional `settings.subagentModels`; absent means children inherit the parent. */
-export interface SubagentModelSettings {
-  defaultModel?: string;
-  defaultEffort?: GenerationThinkingLevel;
-  roles?: Partial<Record<SubagentRole, SubagentModelRoleSetting>>;
-  /** Keys an agent may request. Absent: the parent plus each provider's default model. */
-  allowedModels?: string[];
-  maxEffort?: GenerationThinkingLevel;
-  allowCostlierModels?: boolean;
 }
 
 export interface SubagentModelPolicy {

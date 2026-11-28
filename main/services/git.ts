@@ -23,6 +23,23 @@ import {
   type ManagedWorktreeRemovalPhase,
 } from "./managed-worktree-removal-core.js";
 import type { GitBranches, GitInfo, GitWorktree } from "./types.js";
+import type {
+  GitCommitCapability,
+  GitCommitInput,
+  GitCommitMode,
+  GitCommitResult,
+  GitComparison,
+  GitComparisonDiffInput,
+  GitDiffInput,
+  GitFileDiff,
+  GitPushCapability,
+  GitPushInput,
+  GitPushResult,
+  GitReview,
+  GitReviewFile,
+  GitReviewFileStatus,
+  GitReviewSummary,
+} from "../../renderer/shared/ipc-workspace-git-contracts.js";
 import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import { resolveGitExecutable, resolveGitExecutableMemoized } from "./git-executable.js";
 import { agentCommandEnvironment } from "./agent-command-environment.js";
@@ -461,142 +478,27 @@ export interface GitDeleteWorktreeResult {
   branchDeleted: boolean;
 }
 
-export type GitReviewFileStatus =
-  | "added"
-  | "conflicted"
-  | "copied"
-  | "deleted"
-  | "modified"
-  | "renamed"
-  | "untracked";
-
-export interface GitReviewFile {
-  path: string;
-  previousPath?: string;
-  status: GitReviewFileStatus;
-  staged: boolean;
-  unstaged: boolean;
-  additions?: number;
-  deletions?: number;
-  binary?: boolean;
-}
-
-export interface GitReviewSummary {
-  fileCount: number;
-  additions: number;
-  deletions: number;
-  unavailableStats: number;
-  stagedFiles: number;
-  unstagedFiles: number;
-  conflictedFiles: number;
-}
-
-export interface GitCommitCapability {
-  allowed: boolean;
-  reason?: string;
-  snapshot?: string;
-  snapshotComplete: boolean;
-  repositoryRoot: boolean;
-}
-
-export interface GitReview {
-  isRepo: boolean;
-  branch?: string;
-  files: GitReviewFile[];
-  summary: GitReviewSummary;
-  commit: GitCommitCapability;
-}
-
-export interface GitDiffInput {
-  expectedSnapshot: string;
-  path: string;
-}
-
-export type GitCommitMode = "staged" | "all";
-
-export interface GitCommitInput {
-  expectedSnapshot: string;
-  message: string;
-  mode: GitCommitMode;
-}
-
-export interface GitCommitResult {
-  commit: string;
-  branch: string;
-  remainingChanges?: number;
-  subject: string;
-  warning?: string;
-}
-
-export interface GitPushCapability {
-  allowed: boolean;
-  reason?: string;
-  branch?: string;
-  expectedHead?: string;
-  remotes: string[];
-  remoteIdentities: Record<string, string>;
-  suggestedRemote?: string;
-  destinationBranch?: string;
-  upstream?: string;
-  ahead: number;
-  behind: number;
-  repositoryRoot: boolean;
-  remoteState: "local-ref";
-}
-
-export interface GitPushInput {
-  destinationBranch: string;
-  expectedBranch: string;
-  expectedHead: string;
-  expectedRemoteIdentity: string;
-  remote: string;
-  setUpstream: boolean;
-}
-
-export interface GitPushResult {
-  /** Credential-free repository captured from the reviewed push endpoint. */
-  pullRequestRepository?: string;
-  branch: string;
-  commit: string;
-  destinationBranch: string;
-  remote: string;
-  upstreamSet: boolean;
-  warning?: string;
-}
-
-export interface GitComparison {
-  currentBranch?: string;
-  expectedHead: string;
-  expectedTarget: string;
-  targetRef: string;
-  targetLabel: string;
-  mergeBase: string;
-  ahead: number;
-  behind: number;
-  files: GitReviewFile[];
-  summary: GitReviewSummary;
-  snapshot: string;
-  remoteState: "local-ref";
-}
-
-export interface GitComparisonDiffInput {
-  expectedHead: string;
-  expectedTarget: string;
-  mergeBase: string;
-  path: string;
-  targetRef: string;
-}
+export type {
+  GitCommitCapability,
+  GitCommitInput,
+  GitCommitMode,
+  GitCommitResult,
+  GitComparison,
+  GitComparisonDiffInput,
+  GitDiffInput,
+  GitFileDiff,
+  GitPushCapability,
+  GitPushInput,
+  GitPushResult,
+  GitReview,
+  GitReviewFile,
+  GitReviewFileStatus,
+  GitReviewSummary,
+};
 
 type CommitRefReconciliation = "absent" | "advanced" | "exact" | "unknown";
 
 type IndexFinalization = "branch_moved" | "failed" | "finalized" | "head_locked" | "head_moved";
-
-export interface GitFileDiff {
-  path: string;
-  patch: string;
-  binary: boolean;
-  truncated: boolean;
-}
 
 type TerminationReason = "aborted" | "callback_error" | "output_limit" | "timeout";
 

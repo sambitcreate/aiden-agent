@@ -4,6 +4,15 @@ import type { AuthEvent, AuthInteraction, AuthPrompt, AuthType } from "@earendil
 import { analyticsProviderId } from "./analytics/analytics-ids.js";
 import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
+import type {
+  ProviderAuthDone as ProviderAuthDoneDto,
+  ProviderAuthError as ProviderAuthErrorDto,
+  ProviderAuthErrorCode,
+  ProviderAuthEvent as ProviderAuthEventDto,
+  ProviderAuthPrompt as ProviderAuthPromptDto,
+  ProviderAuthPromptType,
+  ProviderAuthSelectOption as ProviderAuthSelectOptionDto,
+} from "../../renderer/shared/ipc-provider-contracts.js";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
 
 const FLOW_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -27,83 +36,16 @@ const SAFE_ERROR_NAMES = new Set([
   "TypeError",
 ]);
 
-export type ProviderAuthPromptType = AuthPrompt["type"];
 export type ProviderAuthEventType = AuthEvent["type"];
-
-export interface ProviderAuthSelectOptionDto {
-  id: string;
-  label: string;
-  description?: string;
-}
-
-export interface ProviderAuthPromptDto {
-  flowId: string;
-  providerId: string;
-  promptId: string;
-  type: ProviderAuthPromptType;
-  message: string;
-  placeholder?: string;
-  options?: ProviderAuthSelectOptionDto[];
-}
-
-export type ProviderAuthEventDto =
-  | {
-      flowId: string;
-      providerId: string;
-      type: "info";
-      message: string;
-      links?: Array<{ url: string; label?: string }>;
-    }
-  | {
-      flowId: string;
-      providerId: string;
-      type: "auth_url";
-      url: string;
-      instructions?: string;
-    }
-  | {
-      flowId: string;
-      providerId: string;
-      type: "device_code";
-      userCode: string;
-      verificationUri: string;
-      intervalSeconds?: number;
-      expiresInSeconds?: number;
-    }
-  | {
-      flowId: string;
-      providerId: string;
-      type: "browser_open_failed";
-      url: string;
-      message: string;
-    }
-  | {
-      flowId: string;
-      providerId: string;
-      type: "progress";
-      message: string;
-    };
-
-export interface ProviderAuthDoneDto {
-  flowId: string;
-  providerId: string;
-  cancelled: boolean;
-  warning?: string;
-}
-
-export type ProviderAuthErrorCode =
-  | "port_busy"
-  | "rate_limited"
-  | "timed_out"
-  | "verification_failed"
-  | "sign_in_failed";
-
-export interface ProviderAuthErrorDto {
-  flowId: string;
-  providerId: string;
-  code: ProviderAuthErrorCode;
-  message: string;
-}
+export type {
+  ProviderAuthDoneDto,
+  ProviderAuthErrorCode,
+  ProviderAuthErrorDto,
+  ProviderAuthEventDto,
+  ProviderAuthPromptDto,
+  ProviderAuthPromptType,
+  ProviderAuthSelectOptionDto,
+};
 
 export interface ProviderAuthStartRequest {
   flowId: string;

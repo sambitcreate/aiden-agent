@@ -27,12 +27,96 @@ import {
   PRELOAD_MAX_CLIPBOARD_IMAGES,
   PRELOAD_MAX_IMAGE_BYTES,
 } from "../../renderer/preload-attachments.js";
+import type { AuthPrompt } from "@earendil-works/pi-ai";
 import {
   MAX_ATTACHMENT_BATCH_BYTES,
   MAX_CLIPBOARD_IMAGES,
   MAX_IMAGE_BYTES,
 } from "../services/attachments.js";
+import {
+  OPENAI_CODEX_PROVIDER_ID as MainCodexProviderId,
+  type CodexModelSummary as MainCodexModelSummary,
+  type CodexProviderSnapshot as MainCodexProviderSnapshot,
+} from "../services/codex-provider.js";
+import type {
+  GitCommitCapability as MainGitCommitCapability,
+  GitComparison as MainGitComparison,
+  GitFileDiff as MainGitFileDiff,
+  GitPushResult as MainGitPushResult,
+  GitReview as MainGitReview,
+} from "../services/git.js";
+import type { HookBlockedPromptV1 as MainHookBlockedPromptV1 } from "../services/hook-blocked-prompt.js";
+import type {
+  ProviderAuthDoneDto,
+  ProviderAuthErrorDto,
+  ProviderAuthEventDto,
+  ProviderAuthPromptDto,
+  ProviderAuthPromptType as MainProviderAuthPromptType,
+  ProviderAuthSelectOptionDto,
+} from "../services/provider-auth-flow-core.js";
+import type { SubagentRole } from "../services/subagents/capability-profile.js";
+import type {
+  SubagentModelRoleSetting as MainSubagentModelRoleSetting,
+  SubagentModelSettings as MainSubagentModelSettings,
+} from "../services/subagents/subagent-model-selection.js";
+import type {
+  AppSettings as MainAppSettings,
+  AssistantConfig as MainAssistantConfig,
+  Chat as MainChat,
+  ChatMessage as MainChatMessage,
+  ChatMeta as MainChatMeta,
+  ChatStartParams as MainChatStartParams,
+  DiscoveredSkill as MainDiscoveredSkill,
+  ManagedWorktree as MainManagedWorktree,
+  Provider as MainProvider,
+  ScheduledRun as MainScheduledRun,
+  ScheduledTask as MainScheduledTask,
+  ScheduledTaskInput as MainScheduledTaskInput,
+  StoredProvider as MainStoredProvider,
+  UsageTokenBreakdown as MainUsageTokenBreakdown,
+} from "../services/types.js";
+import type {
+  WorkspaceFileEntry as MainWorkspaceFileEntry,
+  WorkspaceFileIndex as MainWorkspaceFileIndex,
+} from "../services/workspace-files.js";
+import {
+  OPENAI_CODEX_PROVIDER_ID as RendererCodexProviderId,
+  type AppSettings as RendererAppSettings,
+  type AssistantConfig as RendererAssistantConfig,
+  type Chat as RendererChat,
+  type ChatMessage as RendererChatMessage,
+  type ChatMeta as RendererChatMeta,
+  type ChatMetadataUpdated,
+  type ChatStartParams as RendererChatStartParams,
+  type CodexModelSummary as RendererCodexModelSummary,
+  type CodexProviderSnapshot as RendererCodexProviderSnapshot,
+  type DiscoveredSkill as RendererDiscoveredSkill,
+  type GitCommitCapability as RendererGitCommitCapability,
+  type GitComparison as RendererGitComparison,
+  type GitFileDiff as RendererGitFileDiff,
+  type GitPushResult as RendererGitPushResult,
+  type GitReview as RendererGitReview,
+  type HookBlockedPromptV1 as RendererHookBlockedPromptV1,
+  type ManagedWorktree as RendererManagedWorktree,
+  type Provider as RendererProvider,
+  type ProviderAuthDone as RendererProviderAuthDone,
+  type ProviderAuthError as RendererProviderAuthError,
+  type ProviderAuthEvent as RendererProviderAuthEvent,
+  type ProviderAuthPrompt as RendererProviderAuthPrompt,
+  type ProviderAuthSelectOption as RendererProviderAuthSelectOption,
+  type ScheduledRun as RendererScheduledRun,
+  type ScheduledTask as RendererScheduledTask,
+  type ScheduledTaskInput as RendererScheduledTaskInput,
+  type SubagentModelRoleSetting as RendererSubagentModelRoleSetting,
+  type SubagentModelSettings as RendererSubagentModelSettings,
+  type UsageTokenBreakdown as RendererUsageTokenBreakdown,
+  type WorkspaceFileEntry as RendererWorkspaceFileEntry,
+  type WorkspaceFileIndex as RendererWorkspaceFileIndex,
+} from "../../renderer/lib/types.js";
 import { MAX_ATTACHMENTS_PER_MESSAGE } from "../../renderer/shared/attachment-contract.js";
+import type { ChatMetadataUpdatedPatch } from "../../renderer/shared/chat-metadata-update.js";
+import { OPENAI_CODEX_PROVIDER_ID as SharedCodexProviderId } from "../../renderer/shared/ipc-provider-contracts.js";
+import type { SubagentSnapshotRole } from "../../renderer/shared/subagent-runs.js";
 
 interface IpcInventory {
   handlers: Set<string>;
@@ -231,7 +315,9 @@ function sorted(values: Iterable<string>): string[] {
 }
 
 const sharedSources = await productionSourceFiles(path.join(REPO_ROOT, "renderer", "shared"));
-const inventory = collectInventory(await productionSourceFiles(MAIN_ROOT), sharedSources);
+const mainSources = await productionSourceFiles(MAIN_ROOT);
+const rendererLibSources = await productionSourceFiles(path.join(REPO_ROOT, "renderer", "lib"));
+const inventory = collectInventory(mainSources, sharedSources);
 const rendererInvokes = collectRendererInvokes(
   [
     ts.createSourceFile(
@@ -492,4 +578,499 @@ test("handler bootstrap registers every dedicated handler surface", async () => 
       `${registration} must be invoked by the IPC bootstrap`,
     );
   }
+});
+
+type AssertExact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+
+function verifySharedIpcTypeContracts(): true {
+  const _exactChecks: [
+    AssertExact<RendererProvider, MainProvider>,
+    AssertExact<RendererCodexModelSummary, MainCodexModelSummary>,
+    AssertExact<RendererCodexProviderSnapshot, MainCodexProviderSnapshot>,
+    AssertExact<RendererProviderAuthSelectOption, ProviderAuthSelectOptionDto>,
+    AssertExact<RendererProviderAuthPrompt, ProviderAuthPromptDto>,
+    AssertExact<RendererProviderAuthEvent, ProviderAuthEventDto>,
+    AssertExact<RendererProviderAuthDone, ProviderAuthDoneDto>,
+    AssertExact<RendererProviderAuthError, ProviderAuthErrorDto>,
+    AssertExact<MainProviderAuthPromptType, AuthPrompt["type"]>,
+    AssertExact<RendererManagedWorktree, MainManagedWorktree>,
+    AssertExact<RendererGitReview, MainGitReview>,
+    AssertExact<RendererGitCommitCapability, MainGitCommitCapability>,
+    AssertExact<RendererGitPushResult, MainGitPushResult>,
+    AssertExact<RendererGitComparison, MainGitComparison>,
+    AssertExact<RendererGitFileDiff, MainGitFileDiff>,
+    AssertExact<RendererHookBlockedPromptV1, MainHookBlockedPromptV1>,
+    AssertExact<RendererDiscoveredSkill, MainDiscoveredSkill>,
+    AssertExact<RendererAssistantConfig, MainAssistantConfig>,
+    AssertExact<RendererSubagentModelRoleSetting, MainSubagentModelRoleSetting>,
+    AssertExact<RendererSubagentModelSettings, MainSubagentModelSettings>,
+    AssertExact<SubagentSnapshotRole, SubagentRole>,
+    AssertExact<RendererAppSettings, MainAppSettings>,
+    AssertExact<RendererUsageTokenBreakdown, MainUsageTokenBreakdown>,
+    AssertExact<ChatMetadataUpdated, ChatMetadataUpdatedPatch>,
+  ] = [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+  ];
+  void _exactChecks;
+
+  // Restored and Agent Slider fields exposed identically in renderer contracts.
+  const _worktree: RendererManagedWorktree = {
+    repositoryPath: "/repo",
+    worktreePath: "/repo/.worktrees/wt",
+    branch: "feat/x",
+    createdFromHead: "abc123",
+    provisionedFiles: [".env.local"],
+  };
+  const _skill: RendererDiscoveredSkill = {
+    id: "skill-1",
+    name: "Skill",
+    description: "Desc",
+    instructions: "Do x",
+    source: "workspace",
+    path: "/repo/.agents/skills/skill/SKILL.md",
+    modelInvocable: true,
+    userInvocable: false,
+  };
+  const _settings: RendererAppSettings = {
+    lastThinkingLevel: "high",
+    agentSlider: {
+      version: 1,
+      stops: [{ id: "stop_00000001", label: "Balanced" }],
+      homeStopId: "stop_00000001",
+    },
+    agentSliderUnreadable: true,
+    subagentModels: {
+      defaultModel: "openai::gpt-5",
+      defaultEffort: "medium",
+      roles: { reviewer: { effort: "high", locked: true } },
+    },
+  };
+  const _tokens: RendererUsageTokenBreakdown = {
+    input: 10,
+    output: 20,
+    cacheRead: 5,
+    cacheWrite: 4,
+    cacheWrite1h: 2,
+    reasoning: 3,
+    total: 30,
+  };
+  const _chatMeta: RendererChatMeta = {
+    id: "chat-1",
+    title: "Chat",
+    thinkingLevel: "medium",
+    createdAt: 1,
+    updatedAt: 2,
+  };
+  const _rendererChat: RendererChat = {
+    ..._chatMeta,
+    imageArtifactRecoveryPending: true,
+    imageArtifactRecoveryUnavailable: false,
+    messages: [],
+  };
+  const _storedProvider: MainStoredProvider = {
+    id: "custom",
+    kind: "openai",
+    label: "Custom",
+    baseUrl: "http://127.0.0.1:1234/v1",
+    models: [],
+    needsKey: false,
+  };
+  const _mainIndex: MainWorkspaceFileIndex = {
+    entries: [
+      {
+        path: "a.ts",
+        name: "a.ts",
+        parentPath: "",
+        depth: 0,
+        kind: "file",
+        filesystemDevice: "1",
+        filesystemInode: "2",
+      },
+    ],
+    truncated: false,
+    skippedDirectories: 0,
+  };
+  const _rendererIndex: RendererWorkspaceFileIndex = {
+    entries: [{ path: "a.ts", name: "a.ts", parentPath: "", depth: 0, kind: "file" }],
+    truncated: false,
+    skippedDirectories: 0,
+  };
+  void _worktree;
+  void _skill;
+  void _settings;
+  void _tokens;
+  void _rendererChat;
+  void _storedProvider;
+  void _mainIndex;
+  void _rendererIndex;
+
+  // 1. Renderer WorkspaceFileEntry rejects main-only filesystemDevice / filesystemInode.
+  const _badFileDevice: RendererWorkspaceFileEntry = {
+    path: "a.ts",
+    name: "a.ts",
+    parentPath: "",
+    depth: 0,
+    kind: "file",
+    // @ts-expect-error filesystemDevice is main-only on WorkspaceFileEntry
+    filesystemDevice: "dev-1",
+  };
+  const _badFileInode: RendererWorkspaceFileEntry = {
+    path: "a.ts",
+    name: "a.ts",
+    parentPath: "",
+    depth: 0,
+    kind: "file",
+    // @ts-expect-error filesystemInode is main-only on WorkspaceFileEntry
+    filesystemInode: "ino-1",
+  };
+  const _goodMainFile: MainWorkspaceFileEntry = {
+    path: "a.ts",
+    name: "a.ts",
+    parentPath: "",
+    depth: 0,
+    kind: "file",
+    filesystemDevice: "dev-1",
+    filesystemInode: "ino-1",
+  };
+
+  // 2. Renderer ChatMessage rejects main-only pi protocol payload.
+  const _badChatMessage: RendererChatMessage = {
+    id: "msg-1",
+    role: "assistant",
+    content: "hi",
+    createdAt: 1,
+    // @ts-expect-error pi protocol payload is main-only on ChatMessage
+    pi: {},
+  };
+  const _goodMainMessage: Pick<MainChatMessage, "id" | "pi"> = { id: "msg-1", pi: undefined };
+
+  // 3. Renderer ChatMeta rejects main-only preview and summaryRevision.
+  const _badChatMetaPreview: RendererChatMeta = {
+    id: "chat-1",
+    title: "Chat",
+    createdAt: 1,
+    updatedAt: 2,
+    // @ts-expect-error preview is main-only on ChatMeta
+    preview: "secret preview",
+  };
+  const _badChatMetaRevision: RendererChatMeta = {
+    id: "chat-1",
+    title: "Chat",
+    createdAt: 1,
+    updatedAt: 2,
+    // @ts-expect-error summaryRevision is main-only on ChatMeta
+    summaryRevision: "rev-1",
+  };
+  const _goodMainMeta: MainChatMeta = {
+    id: "chat-1",
+    title: "Chat",
+    preview: "ok",
+    summaryRevision: "rev-1",
+    createdAt: 1,
+    updatedAt: 2,
+  };
+
+  // 4. Renderer Chat rejects main-only firstMessageCommit (and main Chat rejects renderer recovery flags).
+  const _badRendererChat: RendererChat = {
+    id: "chat-1",
+    title: "Chat",
+    createdAt: 1,
+    updatedAt: 2,
+    messages: [],
+    // @ts-expect-error firstMessageCommit is main-only on Chat
+    firstMessageCommit: { turnId: "t1", fingerprint: "fp" },
+  };
+  const _badMainChatRecovery: MainChat = {
+    id: "chat-1",
+    title: "Chat",
+    createdAt: 1,
+    updatedAt: 2,
+    messages: [],
+    // @ts-expect-error imageArtifactRecoveryPending is renderer-only on Chat
+    imageArtifactRecoveryPending: true,
+  };
+
+  // 5. Renderer ScheduledTask rejects main-only Bot routine and fingerprint fields.
+  const _baseTask: RendererScheduledTask = {
+    id: "task-1",
+    name: "Task",
+    enabled: true,
+    mode: "llm",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    permission: "read-only",
+    notify: true,
+    createdAt: 1,
+    updatedAt: 2,
+  };
+  const _badTaskBot: RendererScheduledTask = {
+    ..._baseTask,
+    // @ts-expect-error botId is main-only on ScheduledTask
+    botId: "bot-1",
+  };
+  const _badTaskFingerprint: RendererScheduledTask = {
+    ..._baseTask,
+    // @ts-expect-error providerFingerprint is main-only on ScheduledTask
+    providerFingerprint: "fp-1",
+  };
+  const _badTaskFires: RendererScheduledTask = {
+    ..._baseTask,
+    // @ts-expect-error pendingRoutineFires is main-only on ScheduledTask
+    pendingRoutineFires: [],
+  };
+  const _goodMainTask: MainScheduledTask = {
+    ..._baseTask,
+    botId: "bot-1",
+    providerFingerprint: "fp-1",
+    pendingRoutineFires: [],
+  };
+
+  // 6. Renderer ScheduledRun rejects main-only routineTiming, reason, failure, and fingerprint fields.
+  const _baseRun: RendererScheduledRun = {
+    id: "run-1",
+    taskId: "task-1",
+    startedAt: 1,
+    finishedAt: 2,
+    result: "success",
+    output: "done",
+  };
+  const _badRunReason: RendererScheduledRun = {
+    ..._baseRun,
+    // @ts-expect-error reason is main-only on ScheduledRun
+    reason: "duplicate",
+  };
+  const _badRunFingerprint: RendererScheduledRun = {
+    ..._baseRun,
+    // @ts-expect-error fingerprint is main-only on ScheduledRun
+    fingerprint: "fp-run",
+  };
+  const _goodMainRun: MainScheduledRun = {
+    ..._baseRun,
+    reason: "duplicate",
+    fingerprint: "fp-run",
+    byHand: true,
+  };
+
+  // 7. Renderer ScheduledTaskInput rejects main-only bindings, originChatId, and Bot routine fields.
+  const _baseTaskInput: RendererScheduledTaskInput = {
+    name: "Task",
+    mode: "llm",
+    cron: "0 9 * * *",
+  };
+  const _badInputFingerprint: RendererScheduledTaskInput = {
+    ..._baseTaskInput,
+    // @ts-expect-error providerFingerprint is main-only on ScheduledTaskInput
+    providerFingerprint: "fp-1",
+  };
+  const _badInputOriginChat: RendererScheduledTaskInput = {
+    ..._baseTaskInput,
+    // @ts-expect-error originChatId is main-only on ScheduledTaskInput
+    originChatId: "chat-1",
+  };
+  const _badInputBot: RendererScheduledTaskInput = {
+    ..._baseTaskInput,
+    // @ts-expect-error botId is main-only on ScheduledTaskInput
+    botId: "bot-1",
+  };
+  const _goodMainInput: MainScheduledTaskInput = {
+    ..._baseTaskInput,
+    providerFingerprint: "fp-1",
+    originChatId: "chat-1",
+    botId: "bot-1",
+  };
+
+  // 8. Renderer ChatStartParams rejects main-only messages and unattended Assistant modes.
+  const _baseStartParams: RendererChatStartParams = {
+    chatId: "chat-1",
+    providerId: "openai",
+    model: "gpt-5",
+    mode: "assistant",
+  };
+  const _badStartMessages: RendererChatStartParams = {
+    ..._baseStartParams,
+    // @ts-expect-error messages is main-only on ChatStartParams
+    messages: [],
+  };
+  const _badStartUnattended: RendererChatStartParams = {
+    ..._baseStartParams,
+    // @ts-expect-error unattended Assistant mode is main-only on ChatStartParams
+    mode: "assistant-unattended",
+  };
+  const _badStartAutomation: RendererChatStartParams = {
+    ..._baseStartParams,
+    // @ts-expect-error automation Assistant mode is main-only on ChatStartParams
+    mode: "assistant-automation",
+  };
+  const _goodMainStart: MainChatStartParams = {
+    ..._baseStartParams,
+    mode: "assistant-unattended",
+    messages: [{ role: "user", content: "hello" }],
+  };
+
+  void _badFileDevice;
+  void _badFileInode;
+  void _goodMainFile;
+  void _badChatMessage;
+  void _goodMainMessage;
+  void _badChatMetaPreview;
+  void _badChatMetaRevision;
+  void _goodMainMeta;
+  void _badRendererChat;
+  void _badMainChatRecovery;
+  void _badTaskBot;
+  void _badTaskFingerprint;
+  void _badTaskFires;
+  void _goodMainTask;
+  void _badRunReason;
+  void _badRunFingerprint;
+  void _goodMainRun;
+  void _badInputFingerprint;
+  void _badInputOriginChat;
+  void _badInputBot;
+  void _goodMainInput;
+  void _badStartMessages;
+  void _badStartUnattended;
+  void _badStartAutomation;
+  void _goodMainStart;
+  return true;
+}
+
+function topLevelDeclaredTypeAndValueNames(sourceFile: ts.SourceFile): Set<string> {
+  const names = new Set<string>();
+  for (const statement of sourceFile.statements) {
+    if (ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement)) {
+      names.add(statement.name.text);
+    } else if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) {
+        if (ts.isIdentifier(declaration.name)) names.add(declaration.name.text);
+      }
+    }
+  }
+  return names;
+}
+
+test("shared IPC domain contract modules unify main and renderer types without cross-process duplication", () => {
+  assert.equal(verifySharedIpcTypeContracts(), true);
+  assert.equal(SharedCodexProviderId, "openai-codex");
+  assert.equal(MainCodexProviderId, SharedCodexProviderId);
+  assert.equal(RendererCodexProviderId, SharedCodexProviderId);
+
+  const expectedSharedModules = [
+    "ipc-chat-schedule-contracts.ts",
+    "ipc-provider-contracts.ts",
+    "ipc-settings-usage-contracts.ts",
+    "ipc-workspace-git-contracts.ts",
+  ];
+  const domainModules = sharedSources.filter((sf) =>
+    expectedSharedModules.includes(path.basename(sf.fileName)),
+  );
+  assert.deepEqual(
+    sorted(domainModules.map((sf) => path.basename(sf.fileName))),
+    expectedSharedModules,
+  );
+
+  // Guardrail: domain contract modules must use relative .js specifiers and have
+  // zero runtime imports and zero imports from Electron, Node, or @earendil-works/pi-ai.
+  for (const domainModule of domainModules) {
+    const fileLabel = path.basename(domainModule.fileName);
+    for (const statement of domainModule.statements) {
+      if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
+        const specifier = statement.moduleSpecifier.text;
+        assert.equal(
+          statement.importClause?.isTypeOnly,
+          true,
+          `${fileLabel} import "${specifier}" must be import type`,
+        );
+        assert.equal(
+          /^\.{1,2}\/.+\.js$/u.test(specifier),
+          true,
+          `${fileLabel} import "${specifier}" must be a relative .js specifier`,
+        );
+        assert.equal(
+          specifier === "electron" ||
+            specifier.startsWith("node:") ||
+            specifier.startsWith("@earendil-works/pi-ai"),
+          false,
+          `${fileLabel} must not import "${specifier}"`,
+        );
+      }
+    }
+  }
+
+  const rendererTypesSource = rendererLibSources.find(
+    (sf) => path.basename(sf.fileName) === "types.ts",
+  );
+  assert.ok(rendererTypesSource, "renderer/lib/types.ts was not found");
+
+  const unifiedMainServiceFiles = new Set([
+    path.join(MAIN_ROOT, "services", "types.ts"),
+    path.join(MAIN_ROOT, "services", "codex-provider.ts"),
+    path.join(MAIN_ROOT, "services", "provider-auth-flow-core.ts"),
+    path.join(MAIN_ROOT, "services", "git.ts"),
+    path.join(MAIN_ROOT, "services", "workspace-files.ts"),
+    path.join(MAIN_ROOT, "services", "hook-blocked-prompt.ts"),
+    path.join(MAIN_ROOT, "services", "subagents", "subagent-model-selection.ts"),
+  ]);
+  const mainServiceDeclaredNames = new Set<string>();
+  for (const sf of mainSources) {
+    if (!unifiedMainServiceFiles.has(sf.fileName)) continue;
+    for (const name of topLevelDeclaredTypeAndValueNames(sf)) {
+      mainServiceDeclaredNames.add(name);
+    }
+  }
+  const rendererLocalNames = topLevelDeclaredTypeAndValueNames(rendererTypesSource);
+  const duplicatedAcrossProcesses = [...rendererLocalNames].filter((name) =>
+    mainServiceDeclaredNames.has(name),
+  );
+  assert.deepEqual(
+    sorted(duplicatedAcrossProcesses),
+    [],
+    "renderer/lib/types.ts must re-export shared IPC types rather than redeclaring main/services symbols",
+  );
+
+  // StoredProvider must stay unexported from renderer/lib/types.ts.
+  const rendererExportedSpecifiers = new Set<string>();
+  let chatMetadataAliasTarget: string | undefined;
+  for (const statement of rendererTypesSource.statements) {
+    if (
+      ts.isExportDeclaration(statement) &&
+      statement.exportClause &&
+      ts.isNamedExports(statement.exportClause)
+    ) {
+      for (const element of statement.exportClause.elements) {
+        rendererExportedSpecifiers.add(element.name.text);
+      }
+    }
+    if (ts.isTypeAliasDeclaration(statement) && statement.name.text === "ChatMetadataUpdated") {
+      if (ts.isTypeReferenceNode(statement.type) && ts.isIdentifier(statement.type.typeName)) {
+        chatMetadataAliasTarget = statement.type.typeName.text;
+      }
+    }
+  }
+  assert.equal(rendererExportedSpecifiers.has("StoredProvider"), false);
+  assert.equal(rendererExportedSpecifiers.has("AssistantConfig"), true);
+  assert.equal(chatMetadataAliasTarget, "ChatMetadataUpdatedPatch");
 });
