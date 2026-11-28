@@ -295,30 +295,44 @@ export class AidenRemoteBotFileService {
       try {
         await authority.revalidateBeforeEffect();
         const index = await listWorkspaceFiles(authority.workingDirectory, authority.signal);
-        const listing = `${deviceId}\u0000${chatId}`;
-        this.handles.supersedeListing(listing);
         const snapshotId = `files_${randomBytes(24).toString("base64url")}`;
-        const entries: AidenRemoteFileEntry[] = [];
-        let omitted = false;
-        for (const entry of index.entries) {
-          // Bot policy revalidation stays serial and runs only after admission.
-          // Share the same budget as workspace/Gemini/legacy file listings.
-          const [inspected] = await mapWorkspaceMetadata([entry], async () => {
+        // Share the same budget as workspace/legacy file listings, then
+        // revalidate Bot policy once before superseding or issuing handles.
+        const inspected = await mapWorkspaceMetadata(
+          index.entries,
+          async (entry) => {
+            if (authority.signal.aborted) {
+              throw authority.signal.reason ?? new BotRuntimeAuthorityError("capability_changed");
+            }
             try {
               const displayPath = safeDisplayPath(entry.path);
-              await authority.revalidateBeforeEffect();
               const claims = await this.claims(deviceId, authority, displayPath, snapshotId);
-              return { displayPath, claims };
+              if (authority.signal.aborted) {
+                throw authority.signal.reason ?? new BotRuntimeAuthorityError("capability_changed");
+              }
+              return { entry, displayPath, claims };
             } catch (error) {
+              if (authority.signal.aborted) {
+                throw authority.signal.reason ?? error;
+              }
               if (error instanceof BotRuntimeAuthorityError) mapAuthorityError(error);
               return undefined;
             }
-          }, authority.signal);
-          if (!inspected) {
+          },
+          authority.signal,
+        );
+        await authority.revalidateBeforeEffect();
+        const listing = `${deviceId}\u0000${chatId}`;
+        this.handles.supersedeListing(listing);
+        const entries: AidenRemoteFileEntry[] = [];
+        let omitted = false;
+        for (const result of inspected) {
+          if (!result) {
             omitted = true;
             continue;
           }
-          const { displayPath, claims } = inspected;
+          const { entry, displayPath, claims } = result;
+          const language = languageFor(entry);
           try {
             entries.push({
               id: this.handles.issue("file", claims, { listing }),
@@ -328,7 +342,7 @@ export class AidenRemoteBotFileService {
               ...(entry.size !== undefined && entry.size <= MAX_WIRE_FILE_SIZE
                 ? { size: entry.size }
                 : {}),
-              ...(languageFor(entry) ? { language: languageFor(entry)! } : {}),
+              ...(language ? { language } : {}),
             });
           } catch (error) {
             if (error instanceof AidenOpaqueHandleError && error.code === "handle_capacity") {
@@ -350,6 +364,9 @@ export class AidenRemoteBotFileService {
           ? authority.signal.reason : caught;
         if (error instanceof AidenRemoteServiceError) throw error;
         if (error instanceof BotRuntimeAuthorityError) mapAuthorityError(error);
+        if (authority.signal.aborted) {
+          mapAuthorityError(new BotRuntimeAuthorityError("capability_changed"));
+        }
         throw new AidenRemoteServiceError(
           "workspace_unavailable",
           "This Bot's files are not currently available on your computer.",
