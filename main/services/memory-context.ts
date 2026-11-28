@@ -65,52 +65,171 @@ function metadataId(chatId: string, kind: string, sourceId: string): string {
   return `memory-doc-${createHash("sha256").update(`${chatId}\0${kind}\0${sourceId}`).digest("hex")}`;
 }
 
+const MAX_CACHED_METADATA_CHATS = 64;
+
+interface CachedMessageMetadata {
+  chatId: string;
+  id: string;
+  role: Chat["messages"][number]["role"];
+  createdAt: number;
+  content: string;
+  attachmentsStamp: string;
+  visualsStamp: string;
+  artifactsStamp: string;
+  documents: readonly MemoryMetadataInput[];
+}
+
+const messageMetadataByObject = new WeakMap<Chat["messages"][number], CachedMessageMetadata>();
+const messageMetadataByChat = new Map<string, Map<string, CachedMessageMetadata>>();
+
+function attachmentsMetadataStamp(attachments: Chat["messages"][number]["attachments"]): string {
+  if (!attachments || attachments.length === 0) return "";
+  return JSON.stringify(
+    attachments.map((attachment) => [attachment.id, attachment.name, attachment.mimeType, attachment.size]),
+  );
+}
+
+function visualsMetadataStamp(visuals: Chat["messages"][number]["uiVisuals"]): string {
+  if (!visuals || visuals.length === 0) return "";
+  return JSON.stringify(visuals.map((visual) => [visual.id, visual.title, visual.fallbackText]));
+}
+
+function artifactsMetadataStamp(artifacts: Chat["messages"][number]["htmlArtifacts"]): string {
+  if (!artifacts || artifacts.length === 0) return "";
+  return JSON.stringify(
+    artifacts.map((artifact) => [artifact.id, artifact.title, artifact.mimeType, artifact.size]),
+  );
+}
+
+function matchesCachedMessage(
+  cached: CachedMessageMetadata | undefined,
+  chatId: string,
+  message: Chat["messages"][number],
+  attachmentsStamp: string,
+  visualsStamp: string,
+  artifactsStamp: string,
+): cached is CachedMessageMetadata {
+  return (
+    cached !== undefined &&
+    cached.chatId === chatId &&
+    cached.id === message.id &&
+    cached.role === message.role &&
+    cached.createdAt === message.createdAt &&
+    cached.content === message.content &&
+    cached.attachmentsStamp === attachmentsStamp &&
+    cached.visualsStamp === visualsStamp &&
+    cached.artifactsStamp === artifactsStamp
+  );
+}
+
+function extractMessageMetadata(
+  chatId: string,
+  message: Chat["messages"][number],
+  chatCache: Map<string, CachedMessageMetadata>,
+): CachedMessageMetadata {
+  const attachmentsStamp = attachmentsMetadataStamp(message.attachments);
+  const visualsStamp = visualsMetadataStamp(message.uiVisuals);
+  const artifactsStamp = artifactsMetadataStamp(message.htmlArtifacts);
+  const cachedByObject = messageMetadataByObject.get(message);
+  if (matchesCachedMessage(cachedByObject, chatId, message, attachmentsStamp, visualsStamp, artifactsStamp)) {
+    if (chatCache.get(message.id) !== cachedByObject) {
+      chatCache.set(message.id, cachedByObject);
+    }
+    return cachedByObject;
+  }
+  const cachedById = chatCache.get(message.id);
+  if (matchesCachedMessage(cachedById, chatId, message, attachmentsStamp, visualsStamp, artifactsStamp)) {
+    return cachedById;
+  }
+  const documents: MemoryMetadataInput[] = [];
+  if ((message.role === "user" || message.role === "assistant") && message.content.trim()) {
+    documents.push({
+      id: metadataId(chatId, "message", message.id),
+      kind: "transcript",
+      text: boundedMetadataText(message.content),
+      createdAt: message.createdAt,
+      chatId,
+      sourceId: message.id,
+    });
+  }
+  for (const attachment of withoutVisualSnapshots(message.attachments ?? [])) {
+    documents.push({
+      id: metadataId(chatId, "attachment", attachment.id),
+      kind: "artifact",
+      text: boundedMetadataText(
+        `Attachment ${attachment.name}; type ${attachment.mimeType}; ${attachment.size} bytes.`,
+      ),
+      createdAt: message.createdAt,
+      chatId,
+      sourceId: attachment.id,
+    });
+  }
+  for (const visual of message.uiVisuals ?? []) {
+    documents.push({
+      id: metadataId(chatId, "ui-visual", visual.id),
+      kind: "artifact",
+      text: boundedMetadataText(`Visual ${visual.title}. ${visual.fallbackText}`),
+      createdAt: message.createdAt,
+      chatId,
+      sourceId: visual.id,
+    });
+  }
+  for (const artifact of message.htmlArtifacts ?? []) {
+    documents.push({
+      id: metadataId(chatId, "artifact", artifact.id),
+      kind: "artifact",
+      text: boundedMetadataText(
+        `HTML artifact ${artifact.title}; type ${artifact.mimeType}; ${artifact.size} bytes.`,
+      ),
+      createdAt: message.createdAt,
+      chatId,
+      sourceId: artifact.id,
+    });
+  }
+  const entry: CachedMessageMetadata = {
+    chatId,
+    id: message.id,
+    role: message.role,
+    createdAt: message.createdAt,
+    content: message.content,
+    attachmentsStamp,
+    visualsStamp,
+    artifactsStamp,
+    documents,
+  };
+  messageMetadataByObject.set(message, entry);
+  chatCache.set(message.id, entry);
+  return entry;
+}
+
 export function memoryMetadataForChat(chat: Chat): MemoryMetadataInput[] {
   const documents: MemoryMetadataInput[] = [];
-  for (const message of chat.messages) {
-    if ((message.role === "user" || message.role === "assistant") && message.content.trim()) {
-      documents.push({
-        id: metadataId(chat.id, "message", message.id),
-        kind: "transcript",
-        text: boundedMetadataText(message.content),
-        createdAt: message.createdAt,
-        chatId: chat.id,
-        sourceId: message.id,
-      });
+  let chatCache = messageMetadataByChat.get(chat.id);
+  if (chatCache) {
+    messageMetadataByChat.delete(chat.id);
+  } else {
+    chatCache = new Map<string, CachedMessageMetadata>();
+  }
+  messageMetadataByChat.set(chat.id, chatCache);
+  while (messageMetadataByChat.size > MAX_CACHED_METADATA_CHATS) {
+    const oldestChatId = messageMetadataByChat.keys().next().value;
+    if (oldestChatId === undefined) break;
+    messageMetadataByChat.delete(oldestChatId);
+  }
+  for (let index = 0; index < chat.messages.length; index += 1) {
+    const message = chat.messages[index]!;
+    const entry = extractMessageMetadata(chat.id, message, chatCache);
+    for (let docIndex = 0; docIndex < entry.documents.length; docIndex += 1) {
+      documents.push(entry.documents[docIndex]!);
     }
-    for (const attachment of withoutVisualSnapshots(message.attachments ?? [])) {
-      documents.push({
-        id: metadataId(chat.id, "attachment", attachment.id),
-        kind: "artifact",
-        text: boundedMetadataText(
-          `Attachment ${attachment.name}; type ${attachment.mimeType}; ${attachment.size} bytes.`,
-        ),
-        createdAt: message.createdAt,
-        chatId: chat.id,
-        sourceId: attachment.id,
-      });
+  }
+  if (chatCache.size > chat.messages.length + 64) {
+    const liveIds = new Set<string>();
+    for (let index = 0; index < chat.messages.length; index += 1) {
+      liveIds.add(chat.messages[index]!.id);
     }
-    for (const visual of message.uiVisuals ?? []) {
-      documents.push({
-        id: metadataId(chat.id, "ui-visual", visual.id),
-        kind: "artifact",
-        text: boundedMetadataText(`Visual ${visual.title}. ${visual.fallbackText}`),
-        createdAt: message.createdAt,
-        chatId: chat.id,
-        sourceId: visual.id,
-      });
-    }
-    for (const artifact of message.htmlArtifacts ?? []) {
-      documents.push({
-        id: metadataId(chat.id, "artifact", artifact.id),
-        kind: "artifact",
-        text: boundedMetadataText(
-          `HTML artifact ${artifact.title}; type ${artifact.mimeType}; ${artifact.size} bytes.`,
-        ),
-        createdAt: message.createdAt,
-        chatId: chat.id,
-        sourceId: artifact.id,
-      });
+    for (const id of chatCache.keys()) {
+      if (!liveIds.has(id)) chatCache.delete(id);
     }
   }
   return documents;

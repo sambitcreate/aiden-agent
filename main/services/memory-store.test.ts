@@ -2,9 +2,14 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 import test, { type TestContext } from "node:test";
+import { Worker } from "node:worker_threads";
+import { memoryMetadataForChat } from "./memory-context.js";
+import { createMainMemoryStore, MAIN_MEMORY_BUSY_TIMEOUT_MS } from "./memory-store-main.js";
 import { MemoryStore, normalizeMemoryText, type MemoryScope } from "./memory-store.js";
+import type { Chat } from "./types.js";
 
 async function fixture(t: TestContext, now: number | (() => number) = 1_000) {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-memory-"));
@@ -651,4 +656,467 @@ test("metadata admission rollback restores evicted documents and replaced chat",
   const db = new DatabaseSync(path.join(root, "memory-v1.sqlite"));
   t.after(() => db.close());
   assert.equal(db.prepare("SELECT updated_at FROM memory_documents WHERE id = 'skew'").get()?.updated_at, 1000);
+});
+
+test("incremental metadata refresh leaves 999 unchanged rows untouched, re-indexes edits, and skips chmod on no-op turns", async (t) => {
+  let now = 1_000;
+  const { store, root } = await fixture(t, () => now);
+  const dbFile = path.join(root, "memory-v1.sqlite");
+  const initialDocs = Array.from({ length: 1_000 }, (_, index) => ({
+    id: `doc-${index}`,
+    kind: "transcript" as const,
+    text: `Transcript item ${index} covering cobaltmilestone${index}.`,
+    chatId: "chat-inc",
+    sourceId: `msg-${index}`,
+    createdAt: 500 + index,
+  }));
+  assert.deepEqual(await store.replaceChatMetadata(workspace, "chat-inc", initialDocs), {
+    accepted: 1_000,
+    rejected: 0,
+    evicted: 0,
+    atCapacity: false,
+  });
+
+  const reader = new DatabaseSync(dbFile);
+  t.after(() => reader.close());
+  const snapshotRows = () =>
+    new Map(
+      (
+        reader
+          .prepare("SELECT id, rowid, updated_at FROM memory_documents WHERE scope_id = ? AND source_chat_id = ?")
+          .all(workspace.id, "chat-inc") as Array<{ id: string; rowid: number; updated_at: number }>
+      ).map((row) => [row.id, row]),
+    );
+
+  const beforeAppend = snapshotRows();
+  assert.equal(beforeAppend.size, 1_000);
+
+  // Append 1 new document onto 1,000 unchanged documents (1,001 total -> bounded 1,000 window).
+  now = 2_000;
+  const appendedDoc = {
+    id: "doc-1000",
+    kind: "transcript" as const,
+    text: "Appended delta document quartzhorizon1000.",
+    chatId: "chat-inc",
+    sourceId: "msg-1000",
+    createdAt: 1_600,
+  };
+  assert.deepEqual(
+    await store.replaceChatMetadata(workspace, "chat-inc", [...initialDocs, appendedDoc]),
+    { accepted: 1_000, rejected: 1, evicted: 0, atCapacity: false },
+  );
+
+  const afterAppend = snapshotRows();
+  assert.equal(afterAppend.size, 1_000);
+  assert.equal(afterAppend.has("doc-0"), false);
+  assert.equal(afterAppend.has("doc-1000"), true);
+  for (let index = 1; index < 1_000; index += 1) {
+    const id = `doc-${index}`;
+    assert.deepEqual(afterAppend.get(id), beforeAppend.get(id), `row ${id} must remain untouched`);
+  }
+  assert.equal((await store.recall(workspace, "quartzhorizon1000")).length, 1);
+  assert.equal((await store.recall(workspace, "cobaltmilestone500")).length, 1);
+
+  // Modify 1 row and remove 1 row: FTS5 delete+insert triggers update recall while other rows stay untouched.
+  now = 3_000;
+  const retainedWindow = [...initialDocs.slice(1), appendedDoc];
+  const editedWindow = retainedWindow
+    .filter((doc) => doc.id !== "doc-501")
+    .map((doc) =>
+      doc.id === "doc-500"
+        ? { ...doc, text: "Edited transcript amberbeacon500." }
+        : doc,
+    );
+  assert.deepEqual(await store.replaceChatMetadata(workspace, "chat-inc", editedWindow), {
+    accepted: 999,
+    rejected: 0,
+    evicted: 0,
+    atCapacity: false,
+  });
+  const afterEdit = snapshotRows();
+  assert.equal(afterEdit.size, 999);
+  assert.equal(afterEdit.has("doc-501"), false);
+  assert.notEqual(afterEdit.get("doc-500")?.rowid, afterAppend.get("doc-500")?.rowid);
+  assert.equal(afterEdit.get("doc-500")?.updated_at, afterAppend.get("doc-500")?.updated_at);
+  assert.equal(afterEdit.get("doc-502")?.rowid, afterAppend.get("doc-502")?.rowid);
+  assert.equal((await store.recall(workspace, "amberbeacon500")).length, 1);
+  assert.deepEqual(await store.recall(workspace, "cobaltmilestone500"), []);
+
+  // No-op turn skips chmod; a subsequent mutating turn repairs private modes back to 0o600.
+  await chmod(dbFile, 0o640);
+  await store.replaceChatMetadata(workspace, "chat-inc", editedWindow);
+  assert.equal((await stat(dbFile)).mode & 0o777, 0o640);
+  await store.replaceChatMetadata(workspace, "chat-inc", [
+    ...editedWindow,
+    {
+      id: "doc-1001",
+      kind: "transcript",
+      text: "Mutating turn restores private mode.",
+      chatId: "chat-inc",
+      sourceId: "msg-1001",
+      createdAt: 3_000,
+    },
+  ]);
+  assert.equal((await stat(dbFile)).mode & 0o777, 0o600);
+
+  // Duplicate IDs still fail with UNIQUE and roll back even when the first copy matches an unchanged row.
+  await assert.rejects(
+    store.replaceChatMetadata(workspace, "chat-inc", [
+      editedWindow[0]!,
+      { ...editedWindow[0]!, text: "Conflicting duplicate copy", sourceId: "dup-source" },
+    ]),
+    /UNIQUE/u,
+  );
+  assert.equal(snapshotRows().size, 1_000);
+});
+
+test("incremental metadata refresh at workspace capacity evicts other chats rather than retained current-chat rows", async (t) => {
+  let now = 1_000;
+  const { store, root } = await fixture(t, () => now);
+  // chat-oldest has 999 rows at createdAt=1; chat-1..chat-4 hold 4,001 rows at createdAt=100..400 (total = 5,000).
+  await store.replaceChatMetadata(
+    workspace,
+    "chat-oldest",
+    Array.from({ length: 999 }, (_, i) => ({
+      id: `oldest-${i}`,
+      kind: "transcript" as const,
+      text: `Oldest chat note ${i}.`,
+      chatId: "chat-oldest",
+      sourceId: `m-${i}`,
+      createdAt: 1,
+    })),
+  );
+  for (let c = 0; c < 4; c += 1) {
+    const length = c === 0 ? 1_000 : c === 1 ? 1_000 : c === 2 ? 1_000 : 1_000;
+    await store.replaceChatMetadata(
+      workspace,
+      `other-${c}`,
+      Array.from({ length }, (_, i) => ({
+        id: `other-${c}-${i}`,
+        kind: "transcript" as const,
+        text: `Other chat ${c} note ${i}.`,
+        chatId: `other-${c}`,
+        sourceId: `m-${i}`,
+        createdAt: 100 + c,
+      })),
+    );
+  }
+  await store.replaceChatMetadata(workspace, "other-extra", [{
+    id: "other-extra-0",
+    kind: "transcript",
+    text: "Extra workspace document.",
+    chatId: "other-extra",
+    sourceId: "m-0",
+    createdAt: 50,
+  }]);
+
+  now = 2_000;
+  const result = await store.replaceChatMetadata(
+    workspace,
+    "chat-oldest",
+    Array.from({ length: 1_000 }, (_, i) => ({
+      id: `oldest-${i}`,
+      kind: "transcript" as const,
+      text: `Oldest chat note ${i}.`,
+      chatId: "chat-oldest",
+      sourceId: `m-${i}`,
+      createdAt: i === 999 ? 2_000 : 1,
+    })),
+  );
+  assert.deepEqual(result, { accepted: 1_000, rejected: 0, evicted: 1, atCapacity: true });
+
+  const db = new DatabaseSync(path.join(root, "memory-v1.sqlite"));
+  t.after(() => db.close());
+  assert.equal(
+    db.prepare("SELECT count(*) AS n FROM memory_documents WHERE source_chat_id = 'chat-oldest'").get()?.n,
+    1_000,
+  );
+  assert.equal(
+    db.prepare("SELECT count(*) AS n FROM memory_documents WHERE source_chat_id = 'other-extra'").get()?.n,
+    0,
+  );
+});
+
+test("deleteSourceChat uses indexed SEARCH plans without full-table SCANs and finishes under 2 ms median", async (t) => {
+  const { store, root } = await fixture(t);
+  for (let c = 0; c < 4; c += 1) {
+    await store.replaceChatMetadata(
+      workspace,
+      `bulk-chat-${c}`,
+      Array.from({ length: 1_000 }, (_, i) => ({
+        id: `bulk-${c}-${i}`,
+        kind: "transcript" as const,
+        text: `Workspace history chat ${c} entry ${i}.`,
+        chatId: `bulk-chat-${c}`,
+        sourceId: `m-${i}`,
+        createdAt: 1_000 + i,
+      })),
+    );
+  }
+  for (let i = 0; i < 200; i += 1) {
+    const base = await store.put({
+      id: `fact-base-${i}`,
+      scope: workspace,
+      text: `Baseline durable fact number ${i}.`,
+      provenance: { kind: "chat_message", chatId: `bulk-chat-${i % 4}`, messageId: `m-${i}` },
+    });
+    if (i % 5 === 0) {
+      await store.put({
+        id: `fact-sup-${i}`,
+        scope: workspace,
+        text: `Updated durable fact number ${i}.`,
+        provenance: { kind: "user_edit", sourceId: "editor" },
+        supersedesId: base.id,
+      });
+    }
+  }
+
+  const reader = new DatabaseSync(path.join(root, "memory-v1.sqlite"));
+  t.after(() => reader.close());
+  for (const sql of [
+    `EXPLAIN QUERY PLAN UPDATE memory_facts SET supersedes_id = NULL
+     WHERE supersedes_id IN (
+       SELECT id FROM memory_facts WHERE provenance_kind = 'chat_message' AND source_chat_id = ?
+     )`,
+    "EXPLAIN QUERY PLAN DELETE FROM memory_facts WHERE provenance_kind = 'chat_message' AND source_chat_id = ?",
+    "EXPLAIN QUERY PLAN DELETE FROM memory_documents WHERE source_chat_id = ?",
+  ]) {
+    const plan = reader.prepare(sql).all("bulk-chat-0") as Array<{ detail: string }>;
+    const details = plan.map(({ detail }) => detail);
+    assert.equal(
+      details.some((detail) => detail.includes("SEARCH")),
+      true,
+      `expected indexed SEARCH plan for ${sql}, got: ${details.join(" | ")}`,
+    );
+    assert.equal(
+      details.some((detail) => /\bSCAN\b/u.test(detail)),
+      false,
+      `expected zero full-table SCAN steps for ${sql}, got: ${details.join(" | ")}`,
+    );
+  }
+
+  const durations: number[] = [];
+  for (let i = 0; i < 15; i += 1) {
+    const targetChat = `ephemeral-del-${i}`;
+    await store.replaceChatMetadata(
+      workspace,
+      targetChat,
+      Array.from({ length: 20 }, (_, d) => ({
+        id: `${targetChat}-${d}`,
+        kind: "transcript" as const,
+        text: `Disposable transcript item ${d} in ${targetChat}.`,
+        chatId: targetChat,
+        sourceId: `m-${d}`,
+        createdAt: 5_000 + d,
+      })),
+    );
+    await store.put({
+      id: `fact-${targetChat}`,
+      scope: workspace,
+      text: `Fact sourced from ${targetChat}.`,
+      provenance: { kind: "chat_message", chatId: targetChat, messageId: "m-0" },
+    });
+    const start = performance.now();
+    const deletedFacts = await store.deleteSourceChat(targetChat);
+    durations.push(performance.now() - start);
+    assert.equal(deletedFacts, 1);
+  }
+  const sorted = [...durations].sort((a, b) => a - b);
+  const medianMs = sorted[Math.floor(sorted.length / 2)]!;
+  assert.ok(medianMs < 2, `expected deleteSourceChat median < 2 ms, recorded ${medianMs.toFixed(3)} ms`);
+});
+
+test("SQLite WAL uses NORMAL sync and caps main-process busy timeout at 100 ms while CLI stores keep 5,000 ms", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-memory-pragmas-"));
+  const legacyRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-memory-legacy-"));
+  const cliStore = new MemoryStore({ root: () => root });
+  const mainStore = createMainMemoryStore({
+    root: () => root,
+    userDataPath: async () => legacyRoot,
+    listWorkspaces: async () => [],
+  });
+  t.after(async () => {
+    await mainStore.close();
+    await cliStore.close();
+    await rm(root, { recursive: true, force: true });
+    await rm(legacyRoot, { recursive: true, force: true });
+  });
+
+  const observed: Array<{ busyTimeout: number; synchronous: number; journalMode: string }> = [];
+  const originalExec = DatabaseSync.prototype.exec;
+  const spy = t.mock.method(DatabaseSync.prototype, "exec", function (this: DatabaseSync, sql: string) {
+    const out = originalExec.call(this, sql);
+    if (sql.includes("CREATE VIRTUAL TABLE IF NOT EXISTS memory_documents_fts")) {
+      const busyTimeout = Number(
+        (this.prepare("PRAGMA busy_timeout").get() as { timeout: number }).timeout,
+      );
+      const synchronous = Number(
+        (this.prepare("PRAGMA synchronous").get() as { synchronous: number }).synchronous,
+      );
+      const journalMode = String(
+        (this.prepare("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode,
+      );
+      observed.push({ busyTimeout, synchronous, journalMode });
+    }
+    return out;
+  });
+
+  await cliStore.list(workspace);
+  await mainStore.list(workspace);
+  spy.mock.restore();
+
+  assert.deepEqual(observed, [
+    { busyTimeout: 5_000, synchronous: 1, journalMode: "wal" },
+    { busyTimeout: MAIN_MEMORY_BUSY_TIMEOUT_MS, synchronous: 1, journalMode: "wal" },
+  ]);
+
+  const acquireWriteLock = () =>
+    new Promise<{ release(delayMs?: number): Promise<void>; scheduleRelease(delayMs: number): void }>(
+      (resolveLocked, rejectLocked) => {
+        const worker = new Worker(
+          `
+          const { DatabaseSync } = require("node:sqlite");
+          const { parentPort, workerData } = require("node:worker_threads");
+          const db = new DatabaseSync(workerData.file);
+          db.exec("PRAGMA busy_timeout = 5000;");
+          db.exec("BEGIN IMMEDIATE");
+          let finished = false;
+          const finish = () => {
+            if (finished) return;
+            finished = true;
+            try {
+              db.exec("COMMIT");
+            } finally {
+              db.close();
+              parentPort.close();
+            }
+          };
+          parentPort.on("message", (msg) => {
+            if (msg && typeof msg.delayMs === "number" && msg.delayMs > 0) {
+              setTimeout(finish, msg.delayMs);
+            } else {
+              finish();
+            }
+          });
+          parentPort.postMessage("locked");
+          `,
+          {
+            eval: true,
+            workerData: { file: path.join(root, "memory-v1.sqlite") },
+          },
+        );
+        let signaled = false;
+        const done = new Promise<void>((resolve, reject) => {
+          worker.once("exit", (code) => {
+            if (code === 0) resolve();
+            else reject(new Error(`lock worker exited with ${code}`));
+          });
+          worker.once("error", reject);
+        });
+        const scheduleRelease = (delayMs: number) => {
+          if (!signaled) {
+            signaled = true;
+            worker.postMessage({ delayMs });
+          }
+        };
+        const release = async (delayMs = 0) => {
+          scheduleRelease(delayMs);
+          await done;
+        };
+        worker.once("message", (msg) => {
+          if (msg === "locked") resolveLocked({ release, scheduleRelease });
+        });
+        worker.once("error", rejectLocked);
+      },
+    );
+
+  // Main-process store fails fast near 100 ms instead of blocking the event loop for 5,000 ms.
+  const mainLock = await acquireWriteLock();
+  const mainStart = performance.now();
+  try {
+    await assert.rejects(
+      mainStore.put({
+        id: "contended-main",
+        scope: workspace,
+        text: "Contended main-thread write degrades quickly.",
+        provenance: { kind: "user_edit", sourceId: "desktop" },
+      }),
+      /locked|busy/iu,
+    );
+  } finally {
+    await mainLock.release();
+  }
+  const mainElapsed = performance.now() - mainStart;
+  assert.ok(
+    mainElapsed >= 80 && mainElapsed < 1_000,
+    `expected main-process 100 ms busy timeout to fail fast (< 1,000 ms), recorded ${mainElapsed.toFixed(1)} ms`,
+  );
+
+  // CLI store keeps its 5,000 ms busy timeout and rides out a 220 ms lock hold.
+  const cliLock = await acquireWriteLock();
+  cliLock.scheduleRelease(220);
+  try {
+    const saved = await cliStore.put({
+      id: "contended-cli",
+      scope: workspace,
+      text: "CLI store waits out brief desktop writes.",
+      provenance: { kind: "user_edit", sourceId: "aiden-cli" },
+    });
+    assert.equal(saved.id, "contended-cli");
+  } finally {
+    await cliLock.release();
+  }
+});
+
+test("appending 1 message to a 1,000-message chat over a 4,000-document workspace runs under 5 ms median", async (t) => {
+  const { store } = await fixture(t);
+  for (let c = 0; c < 4; c += 1) {
+    await store.replaceChatMetadata(
+      workspace,
+      `workspace-chat-${c}`,
+      Array.from({ length: 1_000 }, (_, i) => ({
+        id: `ws-${c}-doc-${i}`,
+        kind: "transcript" as const,
+        text: `Historical workspace conversation ${c} turn ${i} covering architecture.`,
+        chatId: `workspace-chat-${c}`,
+        sourceId: `m-${i}`,
+        createdAt: 1_000 + c * 1_000 + i,
+      })),
+    );
+  }
+  const messages: Chat["messages"] = Array.from({ length: 1_000 }, (_, i) => ({
+    id: `active-msg-${i}`,
+    role: i % 2 === 0 ? "user" : "assistant",
+    content: `Active conversation turn ${i} discussing release milestones and verification.`,
+    createdAt: 10_000 + i,
+  }));
+  const activeChat: Chat = {
+    id: "active-long-chat",
+    title: "Long Chat",
+    workspaceId: workspace.id,
+    messages,
+    createdAt: 10_000,
+    updatedAt: 11_000,
+  };
+  await store.replaceChatMetadata(workspace, activeChat.id, memoryMetadataForChat(activeChat));
+
+  const appendDurations: number[] = [];
+  for (let turn = 0; turn < 15; turn += 1) {
+    messages.push({
+      id: `active-msg-${1_000 + turn}`,
+      role: turn % 2 === 0 ? "user" : "assistant",
+      content: `Follow-up prompt ${turn} extending the 1,000-message workspace conversation.`,
+      createdAt: 20_000 + turn,
+    });
+    const start = performance.now();
+    const metadata = memoryMetadataForChat(activeChat);
+    await store.replaceChatMetadata(workspace, activeChat.id, metadata);
+    appendDurations.push(performance.now() - start);
+  }
+  const sorted = [...appendDurations].sort((a, b) => a - b);
+  const medianMs = sorted[Math.floor(sorted.length / 2)]!;
+  assert.ok(
+    medianMs < 5,
+    `expected 1-message append median < 5 ms, recorded ${medianMs.toFixed(3)} ms`,
+  );
 });
