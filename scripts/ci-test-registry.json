@@ -492,7 +492,8 @@
         "renderer/shared/design-canvas/app-variants.test.ts",
         "main/services/design-canvas/app-server/app-page-files-core.test.ts",
         "main/services/design-canvas/app-server/app-page-files.test.ts",
-        "main/services/design-canvas/app-page-ledger.test.ts"
+        "main/services/design-canvas/app-page-ledger.test.ts",
+        "main/services/design-canvas/app-server/design-app-template.test.ts"
       ],
       "preserved": [
         "browser"

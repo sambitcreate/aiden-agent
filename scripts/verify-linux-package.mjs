@@ -206,6 +206,18 @@ export function assertLinuxBuildConfiguration(packageJson) {
   for (const rule of DESIGN_MD_BUILD_FILE_RULES) {
     if (!files.has(rule)) throw new Error(`build.files must leave out the DESIGN.md CLI files: ${rule} is missing.`);
   }
+  // Design mode's design app template (3d, S105): shared extraResources, with
+  // its dotfiles named, because a packed template without .npmrc would run
+  // its dependencies' install scripts.
+  const template = (build.extraResources ?? []).find((entry) => entry?.from === "resources/design-app-template");
+  if (!template || template.to !== "design-app-template") {
+    throw new Error("build.extraResources must copy resources/design-app-template to design-app-template.");
+  }
+  for (const dotfile of [".npmrc", ".gitignore"]) {
+    if (!(template.filter ?? []).includes(dotfile)) {
+      throw new Error(`The design app template's extraResources filter must name ${dotfile}.`);
+    }
+  }
   if (build.toolsets?.appimage !== "1.0.3") {
     throw new Error(
       "Linux AppImage packages must use the pinned static runtime toolset.",

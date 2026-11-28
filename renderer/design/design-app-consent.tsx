@@ -239,6 +239,7 @@ function useCardAnswer(requestId: string) {
 }
 
 export function DesignAppConsentCard({ request, stacked = false }: { request: DesignAppConsentRequest; stacked?: boolean }) {
+  if (request.kind === "scaffold") return null;
   return request.kind === "attach" ? <DesignAppAttachCard request={request} /> : <DesignAppLaunchCard request={request} stacked={stacked} />;
 }
 

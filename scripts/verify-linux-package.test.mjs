@@ -202,3 +202,15 @@ test("Linux package leaves out the DESIGN.md CLI, its top-level spec files, its 
     assert.throws(() => assertLinuxBuildConfiguration(untrimmed), (error) => error.message.includes(rule), rule);
   }
 });
+
+test("Linux package carries the design app template with its dotfiles", () => {
+  const without = JSON.parse(JSON.stringify(packageJson));
+  without.build.extraResources = without.build.extraResources.filter((entry) => entry.from !== "resources/design-app-template");
+  assert.throws(() => assertLinuxBuildConfiguration(without), /design-app-template/u);
+  for (const dotfile of [".npmrc", ".gitignore"]) {
+    const missing = JSON.parse(JSON.stringify(packageJson));
+    const entry = missing.build.extraResources.find((candidate) => candidate.from === "resources/design-app-template");
+    entry.filter = entry.filter.filter((rule) => rule !== dotfile);
+    assert.throws(() => assertLinuxBuildConfiguration(missing), (error) => error.message.includes(dotfile), dotfile);
+  }
+});
