@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: aiden-agent-desktop-release
@@ -23,6 +23,10 @@ concurrency:
 jobs:
   release:
     if: ${{ vars.RELEASES_ENABLED == 'true' && github.ref == 'refs/heads/main' }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     runs-on: macos-26
     timeout-minutes: 120
     environment: release
@@ -182,12 +186,26 @@ jobs:
         if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run test:e2e:diagnostics:packaged
 
+      - name: Attest verified macOS packages and update feed
+        if: ${{ github.ref == 'refs/heads/main' && steps.version.outputs.publish == 'true' }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            release/distribution/*.dmg
+            release/distribution/*.zip
+            release/distribution/latest-mac.yml
+          create-storage-record: false
+          push-to-registry: false
+
       - name: Stage verified macOS release assets
         if: ${{ steps.version.outputs.publish == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: release-macos
-          path: release/distribution
+          path: |
+            release/distribution/*.dmg
+            release/distribution/*.zip
+            release/distribution/latest-mac.yml
           if-no-files-found: error
           retention-days: 2
 
@@ -335,6 +353,10 @@ jobs:
 
   publish:
     if: ${{ vars.RELEASES_ENABLED == 'true' && github.ref == 'refs/heads/main' }}
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     name: Publish verified desktop release
     needs:
       - release
@@ -378,6 +400,25 @@ jobs:
           path: release/distribution
           merge-multiple: true
 
+      - name: Prepare verified release manifests
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: bash scripts/publish-github-release.sh release/distribution --prepare
+
+      - name: Attest release installer and checksums
+        if: ${{ github.ref == 'refs/heads/main' && steps.version.outputs.publish == 'true' }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            release/distribution/install.sh
+            release/distribution/SHA256SUMS
+          create-storage-record: false
+          push-to-registry: false
+
       - name: Publish verified release assets
         if: ${{ steps.version.outputs.publish == 'true' }}
         shell: bash
@@ -385,4 +426,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
-        run: bash scripts/publish-github-release.sh release/distribution
+        run: bash scripts/publish-github-release.sh release/distribution --publish

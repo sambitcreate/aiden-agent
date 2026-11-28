@@ -16,6 +16,10 @@ jobs:
   bundle:
     name: Keyed server bundle
     if: ${{ github.ref == 'refs/heads/main' }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: release
@@ -59,15 +63,33 @@ jobs:
           node --input-type=module -e 'await import(process.argv[1])' "$PWD/$client_chunk"
 
       - name: Pack the server
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p "$RUNNER_TEMP/server-bundle"
           npm pack ./packages/cli --pack-destination "$RUNNER_TEMP/server-bundle"
+          (
+            cd "$RUNNER_TEMP/server-bundle"
+            sha256sum -- *.tgz > SHA256SUMS
+          )
+
+      - name: Attest keyed server package and checksums
+        if: ${{ github.ref == 'refs/heads/main' }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            ${{ runner.temp }}/server-bundle/*.tgz
+            ${{ runner.temp }}/server-bundle/SHA256SUMS
+          create-storage-record: false
+          push-to-registry: false
 
       - name: Upload the server package
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           # Native helpers come from the build host: this package is Linux x64 only.
           name: aiden-server-keyed-linux-x64
-          path: ${{ runner.temp }}/server-bundle/*.tgz
+          path: |
+            ${{ runner.temp }}/server-bundle/*.tgz
+            ${{ runner.temp }}/server-bundle/SHA256SUMS
           if-no-files-found: error
           retention-days: 30

@@ -10,3 +10,9 @@ The fake `gh` in `scripts/install.test.mjs` never enforced either rule, which is
 ## AppImage updater (2026-10-29)
 
 An in-app gh attestation check for AppImage updates was built in PR #614 and dropped by the owner (most AppImage users lack gh and would stop updating). In-app AppImage updates keep the feed SHA-512 check; publisher verification stays in install.sh and the manual command. See docs/distribution-hardening.md.
+
+## Full 16-deliverable SLSA provenance and macOS installer enforcement (2026-11-28)
+
+- `release.yml` now sets top-level `contents: read`; `jobs.release` (`macos-26`) attests `*.dmg`, `*.zip`, and `latest-mac.yml`, `jobs.linux-release` attests the 8 Linux packages and feeds, and `jobs.publish` (the only job with `contents: write`) splits `scripts/publish-github-release.sh` into `--prepare` and `--publish` so `install.sh` and `SHA256SUMS` are attested before `gh release create`. `Aiden-Agent-Beta-arm64.dmg` is asserted byte-identical to `Aiden-Agent-Beta-<version>-arm64.dmg` in `--prepare` and shares its `macos-26` attestation by SHA-256 digest (14/14 release assets covered).
+- `server-bundle.yml` (`jobs.bundle`) generates `SHA256SUMS` for `*.tgz`, attests both on `refs/heads/main`, and uploads both in `aiden-server-keyed-linux-x64`; `ci.yml` (`jobs.android`) attests `app-debug.apk` and `app-debug.apk.sha256` on `push` to `refs/heads/main` before uploading `aiden-on-the-go-debug-apk` (16/16 deliverables covered).
+- `install.sh` requires `gh` 2.68+ on both macOS and Linux with OS-specific install/upgrade hints and verifies SLSA v1 provenance on both `SHA256SUMS` and the selected installer archive against `--expected-commit` before mounting any DMG (`diskutil image attach`, `codesign`, `spctl`) or installing a package.

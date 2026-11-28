@@ -33,6 +33,29 @@ The root install is required: without it the build fails with `Could not resolve
 
 `aiden --version` prints the server package version (`0.1.0`), which is separate from the desktop app's version.
 
+### Verifying the keyed Linux x64 server bundle (`server-bundle.yml`)
+
+When deploying the manual `Build keyed server bundle` workflow artifact (`aiden-server-keyed-linux-x64`, built on `refs/heads/main` with `AIDEN_POSTHOG_PROJECT_KEY`), verify `SHA256SUMS` and both files' SLSA v1 provenance against the approved 40-character `main` commit with `gh` 2.68+ before unpacking or installing the tarball:
+
+```bash
+approved_commit=REPLACE_WITH_APPROVED_40_CHARACTER_COMMIT
+bundle_dir=/absolute/path/to/extracted/aiden-server-keyed-linux-x64
+(cd "$bundle_dir" && sha256sum --check SHA256SUMS)
+for subject in "$bundle_dir"/SHA256SUMS "$bundle_dir"/aiden-cli-*.tgz; do
+  gh attestation verify "$subject" \
+    --hostname github.com \
+    --repo sambitcreate/aiden-agent \
+    --cert-identity https://github.com/sambitcreate/aiden-agent/.github/workflows/server-bundle.yml@refs/heads/main \
+    --cert-oidc-issuer https://token.actions.githubusercontent.com \
+    --source-ref refs/heads/main \
+    --source-digest "$approved_commit" \
+    --signer-digest "$approved_commit" \
+    --deny-self-hosted-runners \
+    --predicate-type https://slsa.dev/provenance/v1 \
+    --format json
+done
+```
+
 ## First-time setup
 
 Every setup step is a short command you run once over SSH.

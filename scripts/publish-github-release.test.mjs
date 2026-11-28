@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -116,8 +117,10 @@ async function fixture(initialState) {
     }),
   );
   return {
+    bin,
     distribution,
     releaseNotes,
+    runnerTemp,
     statePath,
     env: {
       ...process.env,
@@ -256,4 +259,132 @@ test("rejects mismatched Linux update feeds before creating a release", async ()
   const state = JSON.parse(await readFile(setup.statePath, "utf8"));
   assert.equal(state.createCalls, 0);
   assert.equal(state.uploadCalls, 0);
+});
+
+const expectedReleaseAssetNames = [
+  "Aiden-Agent-0.30.1-arm64-mac.zip",
+  "Aiden-Agent-Beta-0.30.1-arm64.dmg",
+  "Aiden-Agent-Beta-arm64.dmg",
+  "Aiden-Agent-0.30.1-x86_64-linux.AppImage",
+  "Aiden-Agent-0.30.1-arm64-linux.AppImage",
+  "Aiden-Agent-0.30.1-amd64-linux.deb",
+  "Aiden-Agent-0.30.1-arm64-linux.deb",
+  "Aiden-Agent-0.30.1-x86_64-linux.rpm",
+  "Aiden-Agent-0.30.1-aarch64-linux.rpm",
+  "SHA256SUMS",
+  "install.sh",
+  "latest-mac.yml",
+  "latest-linux.yml",
+  "latest-linux-arm64.yml",
+].toSorted();
+
+test("split --prepare and --publish stages SHA256SUMS and byte-identical DMGs before release creation", async () => {
+  const setup = await fixture({});
+  await execFileAsync("bash", [publisher.pathname, setup.distribution, "--prepare"], {
+    env: setup.env,
+  });
+
+  const preparedState = JSON.parse(await readFile(setup.statePath, "utf8"));
+  assert.equal(preparedState.createCalls, 0);
+  assert.equal(preparedState.uploadCalls, 0);
+  assert.equal(preparedState.editCalls, 0);
+
+  const versionedDmgBytes = await readFile(
+    path.join(setup.distribution, "Aiden-Agent-Beta-0.30.1-arm64.dmg"),
+  );
+  const websiteDmgBytes = await readFile(
+    path.join(setup.runnerTemp, "Aiden-Agent-Beta-arm64.dmg"),
+  );
+  const versionedDmgDigest = createHash("sha256").update(versionedDmgBytes).digest("hex");
+  const websiteDmgDigest = createHash("sha256").update(websiteDmgBytes).digest("hex");
+  assert.equal(websiteDmgDigest, versionedDmgDigest);
+
+  const checksumsRaw = await readFile(path.join(setup.distribution, "SHA256SUMS"), "utf8");
+  const checksumEntries = checksumsRaw
+    .trim()
+    .split("\n")
+    .map((line) => line.trim().split(/\s+/u));
+  assert.equal(checksumEntries.length, 13);
+  const checksumMap = new Map(checksumEntries.map(([digest, name]) => [name, digest]));
+  assert.deepEqual([...checksumMap.keys(), "SHA256SUMS"].toSorted(), expectedReleaseAssetNames);
+  assert.equal(checksumMap.get("Aiden-Agent-Beta-0.30.1-arm64.dmg"), versionedDmgDigest);
+  assert.equal(checksumMap.get("Aiden-Agent-Beta-arm64.dmg"), websiteDmgDigest);
+
+  for (const [name, recordedDigest] of checksumMap.entries()) {
+    const filePath =
+      name === "Aiden-Agent-Beta-arm64.dmg"
+        ? path.join(setup.runnerTemp, name)
+        : path.join(setup.distribution, name);
+    const actualDigest = createHash("sha256").update(await readFile(filePath)).digest("hex");
+    assert.equal(recordedDigest, actualDigest, `Digest mismatch for ${name}`);
+  }
+
+  await execFileAsync("bash", [publisher.pathname, setup.distribution, "--publish"], {
+    env: setup.env,
+  });
+  const publishedState = JSON.parse(await readFile(setup.statePath, "utf8"));
+  assert.equal(publishedState.exists, true);
+  assert.equal(publishedState.draft, false);
+  assert.equal(publishedState.createCalls, 1);
+  assert.equal(publishedState.uploadCalls, 1);
+  assert.equal(publishedState.editCalls, 1);
+  assert.deepEqual(
+    publishedState.assets.map((asset) => asset.name).toSorted(),
+    expectedReleaseAssetNames,
+  );
+});
+
+test("--prepare rejects corrupted website DMG copies and --publish rejects unverified or tampered staging", async () => {
+  const uncopied = await fixture({});
+  await assert.rejects(
+    execFileAsync("bash", [publisher.pathname, uncopied.distribution, "--publish"], {
+      env: uncopied.env,
+    }),
+    /run --prepare first/u,
+  );
+  assert.equal(JSON.parse(await readFile(uncopied.statePath, "utf8")).createCalls, 0);
+
+  const corruptCopy = await fixture({});
+  const realCp = (await execFileAsync("bash", ["-c", "command -v cp"])).stdout.trim();
+  const fakeCp = path.join(corruptCopy.bin, "cp");
+  await writeFile(
+    fakeCp,
+    `#!/usr/bin/env bash\n"${realCp}" "$@"\nlast="\${!#}"\nif [[ "$last" == *Aiden-Agent-Beta-arm64.dmg ]]; then printf corrupt >> "$last"; fi\n`,
+    "utf8",
+  );
+  await chmod(fakeCp, 0o755);
+  await assert.rejects(
+    execFileAsync("bash", [publisher.pathname, corruptCopy.distribution, "--prepare"], {
+      env: corruptCopy.env,
+    }),
+    /Website DMG alias digest does not match versioned DMG/u,
+  );
+  assert.equal(JSON.parse(await readFile(corruptCopy.statePath, "utf8")).createCalls, 0);
+
+  const tamperedAlias = await fixture({});
+  await execFileAsync("bash", [publisher.pathname, tamperedAlias.distribution, "--prepare"], {
+    env: tamperedAlias.env,
+  });
+  await writeFile(path.join(tamperedAlias.runnerTemp, "Aiden-Agent-Beta-arm64.dmg"), "tampered");
+  await assert.rejects(
+    execFileAsync("bash", [publisher.pathname, tamperedAlias.distribution, "--publish"], {
+      env: tamperedAlias.env,
+    }),
+    /Website DMG alias digest does not match versioned DMG/u,
+  );
+  assert.equal(JSON.parse(await readFile(tamperedAlias.statePath, "utf8")).createCalls, 0);
+
+  const tamperedInstaller = await fixture({});
+  await execFileAsync("bash", [publisher.pathname, tamperedInstaller.distribution, "--prepare"], {
+    env: tamperedInstaller.env,
+  });
+  await writeFile(path.join(tamperedInstaller.distribution, "install.sh"), "#!/bin/sh\nexit 1\n");
+  await chmod(path.join(tamperedInstaller.distribution, "install.sh"), 0o755);
+  await assert.rejects(
+    execFileAsync("bash", [publisher.pathname, tamperedInstaller.distribution, "--publish"], {
+      env: tamperedInstaller.env,
+    }),
+    /createCalls|FAILED|shasum/iu,
+  );
+  assert.equal(JSON.parse(await readFile(tamperedInstaller.statePath, "utf8")).createCalls, 0);
 });

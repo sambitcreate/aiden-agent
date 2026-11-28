@@ -31,7 +31,7 @@ Usage: sh install.sh [options]
 Options:
   --version VERSION          Install a specific released version.
   --format FORMAT            auto, dmg, deb, rpm, or appimage.
-  --expected-commit SHA      Require this reviewed release commit on Linux.
+  --expected-commit SHA      Require this reviewed release commit.
   --user                     Use ~/Applications on macOS or AppImage on Linux.
   --download-only DIRECTORY  Verify and copy the installer without installing it.
   --plan                     Print the selected artifact without downloading it.
@@ -255,23 +255,33 @@ else
 fi
 [ "$actual_checksum" = "$checksum_lines" ] || fail "installer checksum verification failed."
 
-if [ "$os" = "linux" ]; then
-  has gh || fail "GitHub CLI is required to authenticate Linux release provenance. Install gh and retry."
-  # Distribution packages can lag far behind; the pinned-commit policy needs gh 2.68 or newer.
-  gh_verify_help=$(gh attestation verify --help 2>/dev/null) || gh_verify_help=""
-  case "$gh_verify_help" in
-    *--signer-digest*) ;;
-    *) fail "the installed GitHub CLI ($(gh --version 2>/dev/null | awk 'NR == 1')) is too old to verify Linux release provenance. Install gh 2.68 or newer from https://github.com/cli/cli/blob/trunk/docs/install_linux.md and retry." ;;
-  esac
-  if [ -z "$expected_commit" ]; then
-    expected_commit=$(gh api "repos/${repository}/releases/tags/v${requested_version}" --jq .target_commitish) ||
-      fail "could not resolve the release source commit."
-    printf 'Using release-record commit %s; pass --expected-commit for an independently reviewed pin.\n' "$expected_commit"
-  fi
-  if ! printf '%s\n' "$expected_commit" | grep -Eq '^[0-9a-f]{40}$'; then
-    fail "the expected release commit must be 40 lowercase hexadecimal characters."
-  fi
-  gh attestation verify "$asset_path" \
+if [ "$os" = "macos" ]; then
+  gh_install_hint="brew install gh or https://cli.github.com"
+  gh_upgrade_hint="brew upgrade gh or https://cli.github.com"
+else
+  gh_install_hint="https://github.com/cli/cli/blob/trunk/docs/install_linux.md"
+  gh_upgrade_hint="https://github.com/cli/cli/blob/trunk/docs/install_linux.md"
+fi
+has gh || fail "GitHub CLI is required to authenticate release provenance. Install gh (${gh_install_hint}) and retry."
+# Distribution packages can lag far behind; the pinned-commit policy needs gh 2.68 or newer.
+gh_verify_help=$(gh attestation verify --help 2>/dev/null) || gh_verify_help=""
+case "$gh_verify_help" in
+  *--signer-digest*) ;;
+  *) fail "the installed GitHub CLI ($(gh --version 2>/dev/null | awk 'NR == 1')) is too old to verify release provenance. Install gh 2.68 or newer (${gh_upgrade_hint}) and retry." ;;
+esac
+if [ -z "$expected_commit" ]; then
+  expected_commit=$(gh api "repos/${repository}/releases/tags/v${requested_version}" --jq .target_commitish) ||
+    fail "could not resolve the release source commit."
+  printf 'Using release-record commit %s; pass --expected-commit for an independently reviewed pin.\n' "$expected_commit"
+fi
+if ! printf '%s\n' "$expected_commit" | grep -Eq '^[0-9a-f]{40}$'; then
+  fail "the expected release commit must be 40 lowercase hexadecimal characters."
+fi
+
+verify_release_attestation() {
+  subject=$1
+  label=$2
+  gh attestation verify "$subject" \
     --hostname github.com \
     --repo "$repository" \
     --cert-identity "https://github.com/${repository}/.github/workflows/release.yml@refs/heads/main" \
@@ -281,8 +291,11 @@ if [ "$os" = "linux" ]; then
     --signer-digest "$expected_commit" \
     --deny-self-hosted-runners \
     --predicate-type https://slsa.dev/provenance/v1 \
-    --format json >/dev/null || fail "Linux release provenance verification failed."
-fi
+    --format json >/dev/null || fail "release provenance verification failed for ${label}."
+}
+
+verify_release_attestation "$checksums" "SHA256SUMS"
+verify_release_attestation "$asset_path" "$asset"
 
 verify_macos_app() {
   candidate=$1

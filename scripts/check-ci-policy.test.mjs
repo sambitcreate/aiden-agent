@@ -12,6 +12,10 @@ import { readRegistry } from "./ci-test-registry.mjs";
 
 const workflowUrl = new URL("../.github/workflows/ci.yml", import.meta.url);
 const releaseWorkflowUrl = new URL("../.github/workflows/release.yml", import.meta.url);
+const serverBundleWorkflowUrl = new URL(
+  "../.github/workflows/server-bundle.yml",
+  import.meta.url,
+);
 const pullfrogWorkflowUrl = new URL(
   "../.github/workflows/pullfrog.yml",
   import.meta.url,
@@ -72,21 +76,133 @@ test("CI assigns platform work conservatively and exposes one complete required 
   assert.ok(jobs.catalog.steps.some((step) => step.run === "npm run test:model-catalog"));
 });
 
-test("Android keeps validation and publishes installable artifacts only on main", async () => {
-  const workflow = await readFile(workflowUrl, "utf8");
+function workflowJob(workflow, jobId) {
+  const match = workflow.match(
+    new RegExp(`^ {2}${jobId}:\\n[\\s\\S]*?(?=^ {2}\\S|(?![\\s\\S]))`, "mu"),
+  )?.[0];
+  assert.ok(match, `Missing workflow job: ${jobId}`);
+  return match;
+}
 
-  const sdkSetup = workflowStep(workflow, "Set up Android SDK tools");
+function assertPinnedAttestationStep(step, { expectedCondition, expectedSubjects }) {
+  assert.match(
+    step,
+    /^ {8}uses: actions\/attest@1e69f48acb82d1966a394da916b4c1698aa569d6(?: # v4\.2\.2)?$/mu,
+  );
+  assert.match(step, expectedCondition);
+  assert.match(step, /^ {10}create-storage-record: false$/mu);
+  assert.match(step, /^ {10}push-to-registry: false$/mu);
+  assert.doesNotMatch(
+    step,
+    /(?:predicate(?:-type|-path)?|sbom-path|subject-digest|subject-checksums):/u,
+    "Automatic SLSA provenance must hash the verified files, not accept supplied predicates or digests",
+  );
+  assert.doesNotMatch(step, /continue-on-error:/u);
+
+  const subjects = step.match(/^ {10}subject-path: \|\n((?: {12}[^\n]+\n)+)/mu)?.[1];
+  assert.ok(subjects, "Explicit attestation subjects are required");
+  assert.deepEqual(
+    subjects
+      .trim()
+      .split("\n")
+      .map((line) => line.trim()),
+    expectedSubjects,
+  );
+}
+
+function assertJobPermissions(jobBlock, expectedPermissions, label) {
+  const permissions = jobBlock.match(/^ {4}permissions:\n((?: {6}[^\n]+\n)+)/mu)?.[1];
+  assert.ok(permissions, `${label} must declare explicit job permissions`);
+  assert.deepEqual(
+    permissions
+      .trim()
+      .split("\n")
+      .map((line) => line.trim())
+      .sort(),
+    expectedPermissions.toSorted(),
+  );
+}
+
+function assertTopLevelReadOnlyPermissions(workflow, label) {
+  const parsed = parse(workflow);
+  assert.deepEqual(
+    parsed.permissions,
+    { contents: "read" },
+    `${label} top-level permissions must stay contents: read`,
+  );
+}
+
+function assertAndroidProvenance(workflow) {
+  assertTopLevelReadOnlyPermissions(workflow, "ci.yml");
+  const androidJob = workflowJob(workflow, "android");
+  assertJobPermissions(
+    androidJob,
+    ["attestations: write", "contents: read", "id-token: write"],
+    "Android job",
+  );
+
+  const sdkSetup = workflowStep(androidJob, "Set up Android SDK tools");
   assert.match(sdkSetup, /^ {10}packages: platform-tools$/mu);
 
   const mainPushOnly =
-    /if: \$\{\{ github\.event_name == 'push' && github\.ref == 'refs\/heads\/main' \}\}/u;
-  assert.doesNotMatch(workflowStep(workflow, "Verify Android"), /:app:assembleDebug/u);
+    /^ {8}if: \$\{\{ github\.event_name == 'push' && github\.ref == 'refs\/heads\/main' \}\}$/mu;
+  assert.doesNotMatch(workflowStep(androidJob, "Verify Android"), /:app:assembleDebug/u);
 
-  const assembly = workflowStep(workflow, "Assemble installable debug APK");
+  const assembly = workflowStep(androidJob, "Assemble installable debug APK");
   assert.match(assembly, mainPushOnly);
   assert.match(assembly, /:app:assembleDebug/u);
-  assert.match(workflowStep(workflow, "Record APK checksum"), mainPushOnly);
-  assert.match(workflowStep(workflow, "Upload installable debug APK"), mainPushOnly);
+  const checksum = workflowStep(androidJob, "Record APK checksum");
+  assert.match(checksum, mainPushOnly);
+  assert.match(
+    checksum,
+    /sha256sum app\/build\/outputs\/apk\/debug\/app-debug\.apk > app\/build\/outputs\/apk\/debug\/app-debug\.apk\.sha256/u,
+  );
+
+  const expectedSubjects = [
+    "android/app/build/outputs/apk/debug/app-debug.apk",
+    "android/app/build/outputs/apk/debug/app-debug.apk.sha256",
+  ];
+  const attestName = "Attest installable debug APK and checksum";
+  const attestation = workflowStep(androidJob, attestName);
+  assertPinnedAttestationStep(attestation, {
+    expectedCondition: mainPushOnly,
+    expectedSubjects,
+  });
+
+  const upload = workflowStep(androidJob, "Upload installable debug APK");
+  assert.match(upload, mainPushOnly);
+  assert.match(upload, /^ {10}name: aiden-on-the-go-debug-apk$/mu);
+  const uploadedPaths = upload.match(/^ {10}path: \|\n((?: {12}[^\n]+\n)+)/mu)?.[1];
+  assert.ok(uploadedPaths, "Android upload must list explicit artifact paths");
+  assert.deepEqual(
+    uploadedPaths
+      .trim()
+      .split("\n")
+      .map((line) => line.trim()),
+    expectedSubjects,
+  );
+  assert.doesNotMatch(upload, /continue-on-error:|always\(\)/u);
+
+  const orderedSteps = [
+    "Verify Android",
+    "Run Android Compose UI tests",
+    "Assemble installable debug APK",
+    "Record APK checksum",
+    attestName,
+    "Upload installable debug APK",
+  ];
+  for (let index = 1; index < orderedSteps.length; index += 1) {
+    const previous = androidJob.indexOf(`- name: ${orderedSteps[index - 1]}`);
+    const current = androidJob.indexOf(`- name: ${orderedSteps[index]}`);
+    assert.ok(
+      previous >= 0 && current > previous,
+      `${orderedSteps[index - 1]} must precede ${orderedSteps[index]}`,
+    );
+  }
+}
+
+test("Android keeps validation and publishes attested installable artifacts only on main", async () => {
+  assertAndroidProvenance(await readFile(workflowUrl, "utf8"));
 });
 
 test("both Linux package gates exercise the desktop Pi extensions", async () => {
@@ -335,43 +451,100 @@ test("coverage collection is enabled before positional test paths", async () => 
   assert.ok(flag > 0 && firstTest > flag, "Node coverage flags must precede test files");
 });
 
-function assertLinuxReleaseProvenance(workflow) {
-  const linuxJob = workflow.match(/^ {2}linux-release:\n[\s\S]*?(?=^ {2}\S|(?![\s\S]))/mu)?.[0];
-  assert.ok(linuxJob, "Linux release job is missing");
-  assert.match(linuxJob,
+function assertMacosReleaseProvenance(workflow) {
+  const macJob = workflowJob(workflow, "release");
+  assert.match(
+    macJob,
     /^ {4}if: \$\{\{ vars\.RELEASES_ENABLED == 'true' && github\.ref == 'refs\/heads\/main' \}\}$/mu,
-    "Non-main dispatches must not bypass provenance by skipping attestation");
-  const permissions = linuxJob.match(/^ {4}permissions:\n((?: {6}[^\n]+\n)+)/mu)?.[1];
-  assert.ok(permissions, "Linux release must override inherited write permissions");
-  assert.deepEqual(permissions.trim().split("\n").map(line => line.trim()).sort(),
-    ["attestations: write", "contents: read", "id-token: write"]);
+    "Non-main dispatches must not build or attest macOS releases",
+  );
+  assertJobPermissions(
+    macJob,
+    ["attestations: write", "contents: read", "id-token: write"],
+    "macOS release job",
+  );
+
+  const expectedSubjects = [
+    "release/distribution/*.dmg",
+    "release/distribution/*.zip",
+    "release/distribution/latest-mac.yml",
+  ];
+  const attestName = "Attest verified macOS packages and update feed";
+  const attestation = workflowStep(macJob, attestName);
+  assertPinnedAttestationStep(attestation, {
+    expectedCondition:
+      /^ {8}if: \$\{\{ github\.ref == 'refs\/heads\/main' && steps\.version\.outputs\.publish == 'true' \}\}$/mu,
+    expectedSubjects,
+  });
+
+  const staging = workflowStep(macJob, "Stage verified macOS release assets");
+  const staged = staging.match(/^ {10}path: \|\n((?: {12}[^\n]+\n)+)/mu)?.[1];
+  assert.ok(staged, "macOS release staging must list explicit verified asset globs");
+  assert.deepEqual(
+    staged
+      .trim()
+      .split("\n")
+      .map((line) => line.trim()),
+    expectedSubjects,
+    "Staged macOS assets must exactly match the attested subject classes",
+  );
+  assert.match(staging, /^ {8}if: \$\{\{ steps\.version\.outputs\.publish == 'true' \}\}$/mu);
+  assert.doesNotMatch(staging, /continue-on-error:|always\(\)/u);
+
+  const attestationPosition = macJob.indexOf(`- name: ${attestName}`);
+  for (const predecessor of [
+    "Build, sign, notarize, and verify distribution",
+    "Verify the built app carries the analytics key",
+    "Verify reboot-safe subagent migration in the signed app",
+    "Verify diagnostics in the signed packaged app",
+  ]) {
+    const position = macJob.indexOf(`- name: ${predecessor}`);
+    assert.ok(
+      position >= 0 && position < attestationPosition,
+      `${predecessor} must precede macOS attestation`,
+    );
+  }
+  assert.ok(macJob.indexOf("- name: Stage verified macOS release assets") > attestationPosition);
+}
+
+function assertLinuxReleaseProvenance(workflow) {
+  const linuxJob = workflowJob(workflow, "linux-release");
+  assert.match(
+    linuxJob,
+    /^ {4}if: \$\{\{ vars\.RELEASES_ENABLED == 'true' && github\.ref == 'refs\/heads\/main' \}\}$/mu,
+    "Non-main dispatches must not bypass provenance by skipping attestation",
+  );
+  assertJobPermissions(
+    linuxJob,
+    ["attestations: write", "contents: read", "id-token: write"],
+    "Linux release job",
+  );
 
   const name = "Attest verified Linux packages and update feeds";
   const attestation = workflowStep(linuxJob, name);
-  assert.match(attestation,
-    /^ {8}uses: actions\/attest@1e69f48acb82d1966a394da916b4c1698aa569d6(?: # v4\.2\.2)?$/mu);
-  assert.match(attestation,
-    /^ {8}if: \$\{\{ github\.ref == 'refs\/heads\/main' && steps\.version\.outputs\.publish == 'true' \}\}$/mu);
-  assert.match(attestation, /^ {10}create-storage-record: false$/mu);
-  assert.match(attestation, /^ {10}push-to-registry: false$/mu);
-  assert.doesNotMatch(attestation, /(?:predicate(?:-type|-path)?|sbom-path|subject-digest|subject-checksums):/u,
-    "Automatic SLSA provenance must hash the verified files, not accept supplied predicates or digests");
-  assert.doesNotMatch(attestation, /continue-on-error:/u);
-
   const expectedSubjects = [
     "release/linux-distribution/*.AppImage",
     "release/linux-distribution/*.deb",
     "release/linux-distribution/*.rpm",
     "release/linux-distribution/latest-linux*.yml",
   ];
-  const subjects = attestation.match(/^ {10}subject-path: \|\n((?: {12}[^\n]+\n)+)/mu)?.[1];
-  assert.ok(subjects, "Explicit attestation subjects are required");
-  assert.deepEqual(subjects.trim().split("\n").map(line => line.trim()), expectedSubjects);
+  assertPinnedAttestationStep(attestation, {
+    expectedCondition:
+      /^ {8}if: \$\{\{ github\.ref == 'refs\/heads\/main' && steps\.version\.outputs\.publish == 'true' \}\}$/mu,
+    expectedSubjects,
+  });
+
   const staging = workflowStep(linuxJob, "Stage verified Linux release assets");
   const staged = staging.match(/^ {10}path: \|\n((?: {12}[^\n]+\n)+)/mu)?.[1];
   assert.ok(staged);
-  assert.deepEqual(staged.trim().split("\n").map(line => line.trim()), expectedSubjects,
-    "Staged Linux assets must exactly match the attested subject classes");
+  assert.deepEqual(
+    staged
+      .trim()
+      .split("\n")
+      .map((line) => line.trim()),
+    expectedSubjects,
+    "Staged Linux assets must exactly match the attested subject classes",
+  );
   const attestationPosition = linuxJob.indexOf(`- name: ${name}`);
   for (const predecessor of [
     "Verify Linux contracts, diagnostics, and native helpers",
@@ -386,32 +559,525 @@ function assertLinuxReleaseProvenance(workflow) {
   assert.doesNotMatch(staging, /continue-on-error:|always\(\)/u);
 }
 
-test("Linux release attestations cover verified packages and feeds with scoped main-only permissions", async () => {
-  assertLinuxReleaseProvenance(await readFile(releaseWorkflowUrl, "utf8"));
+function assertPublishReleaseProvenance(workflow) {
+  const publishJob = workflowJob(workflow, "publish");
+  assert.match(
+    publishJob,
+    /^ {4}if: \$\{\{ vars\.RELEASES_ENABLED == 'true' && github\.ref == 'refs\/heads\/main' \}\}$/mu,
+    "Non-main dispatches must not publish releases",
+  );
+  assertJobPermissions(
+    publishJob,
+    ["attestations: write", "contents: write", "id-token: write"],
+    "Publish release job",
+  );
+
+  const prepare = workflowStep(publishJob, "Prepare verified release manifests");
+  assert.match(prepare, /^ {8}if: \$\{\{ steps\.version\.outputs\.publish == 'true' \}\}$/mu);
+  assert.match(
+    prepare,
+    /^ {8}run: bash scripts\/publish-github-release\.sh release\/distribution --prepare$/mu,
+  );
+
+  const attestName = "Attest release installer and checksums";
+  const attestation = workflowStep(publishJob, attestName);
+  assertPinnedAttestationStep(attestation, {
+    expectedCondition:
+      /^ {8}if: \$\{\{ github\.ref == 'refs\/heads\/main' && steps\.version\.outputs\.publish == 'true' \}\}$/mu,
+    expectedSubjects: [
+      "release/distribution/install.sh",
+      "release/distribution/SHA256SUMS",
+    ],
+  });
+
+  const publish = workflowStep(publishJob, "Publish verified release assets");
+  assert.match(publish, /^ {8}if: \$\{\{ steps\.version\.outputs\.publish == 'true' \}\}$/mu);
+  assert.match(
+    publish,
+    /^ {8}run: bash scripts\/publish-github-release\.sh release\/distribution --publish$/mu,
+  );
+  assert.doesNotMatch(publish, /continue-on-error:|always\(\)/u);
+
+  const orderedSteps = [
+    "Download verified desktop assets",
+    "Prepare verified release manifests",
+    attestName,
+    "Publish verified release assets",
+  ];
+  for (let index = 1; index < orderedSteps.length; index += 1) {
+    const previous = publishJob.indexOf(`- name: ${orderedSteps[index - 1]}`);
+    const current = publishJob.indexOf(`- name: ${orderedSteps[index]}`);
+    assert.ok(
+      previous >= 0 && current > previous,
+      `${orderedSteps[index - 1]} must precede ${orderedSteps[index]}`,
+    );
+  }
+}
+
+function assertReleaseProvenance(workflow) {
+  assertTopLevelReadOnlyPermissions(workflow, "release.yml");
+  const parsed = parse(workflow);
+  const writeJobs = Object.entries(parsed.jobs)
+    .filter(([, job]) => job.permissions?.contents === "write")
+    .map(([name]) => name);
+  assert.deepEqual(writeJobs, ["publish"], "Only jobs.publish may hold contents: write");
+  assertMacosReleaseProvenance(workflow);
+  assertLinuxReleaseProvenance(workflow);
+  assertPublishReleaseProvenance(workflow);
+}
+
+function assertServerBundleProvenance(workflow) {
+  assertTopLevelReadOnlyPermissions(workflow, "server-bundle.yml");
+  const bundleJob = workflowJob(workflow, "bundle");
+  assert.match(
+    bundleJob,
+    /^ {4}if: \$\{\{ github\.ref == 'refs\/heads\/main' \}\}$/mu,
+    "Keyed server bundle must run only on main",
+  );
+  assertJobPermissions(
+    bundleJob,
+    ["attestations: write", "contents: read", "id-token: write"],
+    "Server bundle job",
+  );
+
+  const pack = workflowStep(bundleJob, "Pack the server");
+  assert.match(pack, /npm pack \.\/packages\/cli --pack-destination "\$RUNNER_TEMP\/server-bundle"/u);
+  assert.match(pack, /sha256sum -- \*\.tgz > SHA256SUMS/u);
+
+  const expectedSubjects = [
+    "${{ runner.temp }}/server-bundle/*.tgz",
+    "${{ runner.temp }}/server-bundle/SHA256SUMS",
+  ];
+  const attestName = "Attest keyed server package and checksums";
+  const attestation = workflowStep(bundleJob, attestName);
+  assertPinnedAttestationStep(attestation, {
+    expectedCondition: /^ {8}if: \$\{\{ github\.ref == 'refs\/heads\/main' \}\}$/mu,
+    expectedSubjects,
+  });
+
+  const upload = workflowStep(bundleJob, "Upload the server package");
+  assert.match(upload, /^ {10}name: aiden-server-keyed-linux-x64$/mu);
+  const uploadedPaths = upload.match(/^ {10}path: \|\n((?: {12}[^\n]+\n)+)/mu)?.[1];
+  assert.ok(uploadedPaths, "Server bundle upload must list explicit artifact paths");
+  assert.deepEqual(
+    uploadedPaths
+      .trim()
+      .split("\n")
+      .map((line) => line.trim()),
+    expectedSubjects,
+  );
+  assert.doesNotMatch(upload, /continue-on-error:|always\(\)/u);
+
+  const orderedSteps = [
+    "Build the keyed bundle",
+    "Verify the bundle carries the key and starts",
+    "Pack the server",
+    attestName,
+    "Upload the server package",
+  ];
+  for (let index = 1; index < orderedSteps.length; index += 1) {
+    const previous = bundleJob.indexOf(`- name: ${orderedSteps[index - 1]}`);
+    const current = bundleJob.indexOf(`- name: ${orderedSteps[index]}`);
+    assert.ok(
+      previous >= 0 && current > previous,
+      `${orderedSteps[index - 1]} must precede ${orderedSteps[index]}`,
+    );
+  }
+}
+
+test("release, server bundle, and Android attestations cover all 16 deliverables with scoped main-only permissions", async () => {
+  const [releaseWorkflow, serverBundleWorkflow, ciWorkflow] = await Promise.all([
+    readFile(releaseWorkflowUrl, "utf8"),
+    readFile(serverBundleWorkflowUrl, "utf8"),
+    readFile(workflowUrl, "utf8"),
+  ]);
+  assertReleaseProvenance(releaseWorkflow);
+  assertServerBundleProvenance(serverBundleWorkflow);
+  assertAndroidProvenance(ciWorkflow);
 });
 
-test("Linux provenance policy rejects bypasses, incomplete subjects, and custom claims", async () => {
-  const workflow = await readFile(releaseWorkflowUrl, "utf8");
+test("provenance policy rejects bypasses, incomplete subjects, ordering regressions, and permission escalations", async () => {
+  const [releaseWorkflow, serverBundleWorkflow, ciWorkflow] = await Promise.all([
+    readFile(releaseWorkflowUrl, "utf8"),
+    readFile(serverBundleWorkflowUrl, "utf8"),
+    readFile(workflowUrl, "utf8"),
+  ]);
+
+  const mutateJob = (workflow, jobId, transform) => {
+    const original = workflowJob(workflow, jobId);
+    const updated = transform(original);
+    assert.notEqual(updated, original, `Mutation on ${jobId} produced no change`);
+    return workflow.replace(original, updated);
+  };
+
   for (const [name, mutate] of [
-    ["moving action ref", source => source.replace("actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6", "actions/attest@v4")],
-    ["branch dispatch bypass", source => source.replace(/( {2}linux-release:\n[\s\S]*? {4}if: \$\{\{ )vars\.RELEASES_ENABLED == 'true' && github\.ref == 'refs\/heads\/main'/u, "$1vars.RELEASES_ENABLED == 'true'")],
-    ["missing publish gate", source => source.replace("github.ref == 'refs/heads/main' && steps.version.outputs.publish == 'true'", "github.ref == 'refs/heads/main'")],
-    ["unnecessary content writes", source => source.replace("      contents: read", "      contents: write")],
-    ["extra metadata permission", source => source.replace("      attestations: write", "      attestations: write\n      artifact-metadata: write")],
-    ["missing RPM subject", source => source.replace("            release/linux-distribution/*.rpm\n", "")],
-    ["broad subject wildcard", source => source.replace("            release/linux-distribution/*.AppImage", "            release/linux-distribution/*")],
-    ["custom predicate", source => source.replace("          create-storage-record: false", "          predicate-type: https://example.invalid/custom\n          predicate: '{}'\n          create-storage-record: false")],
-    ["registry publication", source => source.replace("          push-to-registry: false", "          push-to-registry: true")],
-    ["ignored attestation failure", source => source.replace("        uses: actions/attest@", "        continue-on-error: true\n        uses: actions/attest@")],
-    ["missing smoke gate", source => source.replace("      - name: Smoke the exact release GUI without a keyring session", "      - name: Removed smoke")],
-    ["attestation before smoke", source => {
-      const step = workflowStep(source, "Attest verified Linux packages and update feeds");
-      return source.replace(step, "").replace(
-        "      - name: Smoke the exact release GUI without a keyring session",
-        `${step}      - name: Smoke the exact release GUI without a keyring session`,
-      );
-    }],
-  ]) assert.throws(() => assertLinuxReleaseProvenance(mutate(workflow)), undefined, name);
+    [
+      "top-level release contents: write",
+      (source) => source.replace("permissions:\n  contents: read", "permissions:\n  contents: write"),
+    ],
+    [
+      "macOS moving action ref",
+      (source) =>
+        mutateJob(source, "release", (job) =>
+          job.replace("actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6", "actions/attest@v4"),
+        ),
+    ],
+    [
+      "macOS branch dispatch bypass",
+      (source) =>
+        mutateJob(source, "release", (job) =>
+          job.replace(
+            "vars.RELEASES_ENABLED == 'true' && github.ref == 'refs/heads/main'",
+            "vars.RELEASES_ENABLED == 'true'",
+          ),
+        ),
+    ],
+    [
+      "macOS missing main-ref attestation guard",
+      (source) =>
+        mutateJob(source, "release", (job) =>
+          job.replace(
+            "github.ref == 'refs/heads/main' && steps.version.outputs.publish == 'true'",
+            "steps.version.outputs.publish == 'true'",
+          ),
+        ),
+    ],
+    [
+      "macOS unnecessary content writes",
+      (source) =>
+        mutateJob(source, "release", (job) =>
+          job.replace("      contents: read", "      contents: write"),
+        ),
+    ],
+    [
+      "macOS missing DMG subject",
+      (source) =>
+        mutateJob(source, "release", (job) =>
+          job.replace("            release/distribution/*.dmg\n", ""),
+        ),
+    ],
+    [
+      "macOS missing ZIP subject",
+      (source) =>
+        mutateJob(source, "release", (job) =>
+          job.replace("            release/distribution/*.zip\n", ""),
+        ),
+    ],
+    [
+      "macOS missing latest-mac.yml subject",
+      (source) =>
+        mutateJob(source, "release", (job) =>
+          job.replace("            release/distribution/latest-mac.yml\n", ""),
+        ),
+    ],
+    [
+      "macOS broad directory staging",
+      (source) =>
+        mutateJob(source, "release", (job) =>
+          job.replace(
+            "          path: |\n            release/distribution/*.dmg\n            release/distribution/*.zip\n            release/distribution/latest-mac.yml",
+            "          path: release/distribution",
+          ),
+        ),
+    ],
+    [
+      "macOS attestation before packaged diagnostics",
+      (source) =>
+        mutateJob(source, "release", (job) => {
+          const step = workflowStep(job, "Attest verified macOS packages and update feed");
+          return job.replace(step, "").replace(
+            "      - name: Verify diagnostics in the signed packaged app",
+            `${step}      - name: Verify diagnostics in the signed packaged app`,
+          );
+        }),
+    ],
+    [
+      "Linux moving action ref",
+      (source) =>
+        mutateJob(source, "linux-release", (job) =>
+          job.replace("actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6", "actions/attest@v4"),
+        ),
+    ],
+    [
+      "Linux branch dispatch bypass",
+      (source) =>
+        mutateJob(source, "linux-release", (job) =>
+          job.replace(
+            "vars.RELEASES_ENABLED == 'true' && github.ref == 'refs/heads/main'",
+            "vars.RELEASES_ENABLED == 'true'",
+          ),
+        ),
+    ],
+    [
+      "Linux missing publish gate",
+      (source) =>
+        mutateJob(source, "linux-release", (job) =>
+          job.replace(
+            "github.ref == 'refs/heads/main' && steps.version.outputs.publish == 'true'",
+            "github.ref == 'refs/heads/main'",
+          ),
+        ),
+    ],
+    [
+      "Linux unnecessary content writes",
+      (source) =>
+        mutateJob(source, "linux-release", (job) =>
+          job.replace("      contents: read", "      contents: write"),
+        ),
+    ],
+    [
+      "Linux extra metadata permission",
+      (source) =>
+        mutateJob(source, "linux-release", (job) =>
+          job.replace(
+            "      attestations: write",
+            "      attestations: write\n      artifact-metadata: write",
+          ),
+        ),
+    ],
+    [
+      "Linux missing RPM subject",
+      (source) =>
+        mutateJob(source, "linux-release", (job) =>
+          job.replace("            release/linux-distribution/*.rpm\n", ""),
+        ),
+    ],
+    [
+      "Linux broad subject wildcard",
+      (source) =>
+        mutateJob(source, "linux-release", (job) =>
+          job.replace(
+            "            release/linux-distribution/*.AppImage",
+            "            release/linux-distribution/*",
+          ),
+        ),
+    ],
+    [
+      "Linux custom predicate",
+      (source) =>
+        mutateJob(source, "linux-release", (job) =>
+          job.replace(
+            "          create-storage-record: false",
+            "          predicate-type: https://example.invalid/custom\n          predicate: '{}'\n          create-storage-record: false",
+          ),
+        ),
+    ],
+    [
+      "Linux registry publication",
+      (source) =>
+        mutateJob(source, "linux-release", (job) =>
+          job.replace("          push-to-registry: false", "          push-to-registry: true"),
+        ),
+    ],
+    [
+      "Linux ignored attestation failure",
+      (source) =>
+        mutateJob(source, "linux-release", (job) =>
+          job.replace(
+            "        uses: actions/attest@",
+            "        continue-on-error: true\n        uses: actions/attest@",
+          ),
+        ),
+    ],
+    [
+      "Linux missing smoke gate",
+      (source) =>
+        mutateJob(source, "linux-release", (job) =>
+          job.replace(
+            "      - name: Smoke the exact release GUI without a keyring session",
+            "      - name: Removed smoke",
+          ),
+        ),
+    ],
+    [
+      "Linux attestation before smoke",
+      (source) =>
+        mutateJob(source, "linux-release", (job) => {
+          const step = workflowStep(job, "Attest verified Linux packages and update feeds");
+          return job.replace(step, "").replace(
+            "      - name: Smoke the exact release GUI without a keyring session",
+            `${step}      - name: Smoke the exact release GUI without a keyring session`,
+          );
+        }),
+    ],
+    [
+      "publish missing main-ref attestation guard",
+      (source) =>
+        mutateJob(source, "publish", (job) =>
+          job.replace(
+            "github.ref == 'refs/heads/main' && steps.version.outputs.publish == 'true'",
+            "steps.version.outputs.publish == 'true'",
+          ),
+        ),
+    ],
+    [
+      "publish missing install.sh subject",
+      (source) =>
+        mutateJob(source, "publish", (job) =>
+          job.replace("            release/distribution/install.sh\n", ""),
+        ),
+    ],
+    [
+      "publish missing SHA256SUMS subject",
+      (source) =>
+        mutateJob(source, "publish", (job) =>
+          job.replace("            release/distribution/SHA256SUMS\n", ""),
+        ),
+    ],
+    [
+      "publish attestation after release creation",
+      (source) =>
+        mutateJob(source, "publish", (job) => {
+          const step = workflowStep(job, "Attest release installer and checksums");
+          const publishStep = workflowStep(job, "Publish verified release assets");
+          return job.replace(step, "").replace(publishStep, `${publishStep}\n${step}`);
+        }),
+    ],
+    [
+      "publish unsplit script invocation",
+      (source) =>
+        mutateJob(source, "publish", (job) =>
+          job.replace(
+            "run: bash scripts/publish-github-release.sh release/distribution --publish",
+            "run: bash scripts/publish-github-release.sh release/distribution",
+          ),
+        ),
+    ],
+  ]) {
+    assert.throws(() => assertReleaseProvenance(mutate(releaseWorkflow)), undefined, name);
+  }
+
+  for (const [name, mutate] of [
+    [
+      "server-bundle top-level contents: write",
+      (source) => source.replace("permissions:\n  contents: read", "permissions:\n  contents: write"),
+    ],
+    [
+      "server-bundle job contents: write",
+      (source) =>
+        mutateJob(source, "bundle", (job) =>
+          job.replace("      contents: read", "      contents: write"),
+        ),
+    ],
+    [
+      "server-bundle missing main-ref guard on attestation",
+      (source) =>
+        mutateJob(source, "bundle", (job) =>
+          job.replace("        if: ${{ github.ref == 'refs/heads/main' }}\n", ""),
+        ),
+    ],
+    [
+      "server-bundle missing SHA256SUMS generation",
+      (source) =>
+        mutateJob(source, "bundle", (job) =>
+          job.replace("sha256sum -- *.tgz > SHA256SUMS", "true"),
+        ),
+    ],
+    [
+      "server-bundle missing tarball subject",
+      (source) =>
+        mutateJob(source, "bundle", (job) =>
+          job.replace("            ${{ runner.temp }}/server-bundle/*.tgz\n", ""),
+        ),
+    ],
+    [
+      "server-bundle missing SHA256SUMS subject",
+      (source) =>
+        mutateJob(source, "bundle", (job) =>
+          job.replace("            ${{ runner.temp }}/server-bundle/SHA256SUMS\n", ""),
+        ),
+    ],
+    [
+      "server-bundle upload missing SHA256SUMS",
+      (source) =>
+        mutateJob(source, "bundle", (job) =>
+          job.replace(
+            "          path: |\n            ${{ runner.temp }}/server-bundle/*.tgz\n            ${{ runner.temp }}/server-bundle/SHA256SUMS",
+            "          path: ${{ runner.temp }}/server-bundle/*.tgz",
+          ),
+        ),
+    ],
+    [
+      "server-bundle attestation after upload",
+      (source) =>
+        mutateJob(source, "bundle", (job) => {
+          const step = workflowStep(job, "Attest keyed server package and checksums");
+          const upload = workflowStep(job, "Upload the server package");
+          return job.replace(step, "").replace(upload, `${upload}\n${step}`);
+        }),
+    ],
+  ]) {
+    assert.throws(() => assertServerBundleProvenance(mutate(serverBundleWorkflow)), undefined, name);
+  }
+
+  for (const [name, mutate] of [
+    [
+      "ci top-level contents: write",
+      (source) => source.replace("permissions:\n  contents: read", "permissions:\n  contents: write"),
+    ],
+    [
+      "android job contents: write",
+      (source) =>
+        mutateJob(source, "android", (job) =>
+          job.replace("      contents: read", "      contents: write"),
+        ),
+    ],
+    [
+      "android PR attestation leak",
+      (source) =>
+        mutateJob(source, "android", (job) => {
+          const step = workflowStep(job, "Attest installable debug APK and checksum");
+          return job.replace(
+            step,
+            step.replace(
+              "github.event_name == 'push' && github.ref == 'refs/heads/main'",
+              "github.ref == 'refs/heads/main'",
+            ),
+          );
+        }),
+    ],
+    [
+      "android missing main-ref guard",
+      (source) =>
+        mutateJob(source, "android", (job) => {
+          const step = workflowStep(job, "Attest installable debug APK and checksum");
+          return job.replace(
+            step,
+            step.replace(
+              "github.event_name == 'push' && github.ref == 'refs/heads/main'",
+              "github.event_name == 'push'",
+            ),
+          );
+        }),
+    ],
+    [
+      "android missing APK subject",
+      (source) =>
+        mutateJob(source, "android", (job) =>
+          job.replace("            android/app/build/outputs/apk/debug/app-debug.apk\n", ""),
+        ),
+    ],
+    [
+      "android missing checksum subject",
+      (source) =>
+        mutateJob(source, "android", (job) =>
+          job.replace("            android/app/build/outputs/apk/debug/app-debug.apk.sha256\n", ""),
+        ),
+    ],
+    [
+      "android attestation before checksum generation",
+      (source) =>
+        mutateJob(source, "android", (job) => {
+          const step = workflowStep(job, "Attest installable debug APK and checksum");
+          return job.replace(step, "").replace(
+            "      - name: Record APK checksum",
+            `${step}      - name: Record APK checksum`,
+          );
+        }),
+    ],
+  ]) {
+    assert.throws(() => assertAndroidProvenance(mutate(ciWorkflow)), undefined, name);
+  }
 });
 
 test("CI supersedes older PR and main runs, keeps dispatches independent, and keeps portable static checks on Linux", async () => {
