@@ -1972,6 +1972,19 @@ const destructiveHighlightClass =
   "data-[highlighted]:bg-fill-danger data-[highlighted]:text-fill-danger-foreground";
 const menuItemClass =
   "relative flex min-h-7 cursor-default select-none items-center gap-2 rounded-lg px-2 py-1 text-regular outline-none transition-colors duration-(--motion-duration) ease-standard data-[highlighted]:bg-fill-accent data-[highlighted]:text-fill-accent-foreground data-[highlighted]:**:text-current data-[disabled]:pointer-events-none data-[disabled]:opacity-45";
+type MenuItemColorProps = { icon?: string; color?: string };
+function menuItemTone(color?: string) {
+  const destructive = color === "red" || color === "status-red";
+  return {
+    liveGuard: destructive ? ("confirm" as const) : undefined,
+    toneClass: cn(
+      menuItemClass,
+      color === "red" && "text-red",
+      color === "status-red" && "text-status-red",
+      destructive && destructiveHighlightClass,
+    ),
+  };
+}
 
 export function DropdownMenu(props: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
   return <DropdownMenuPrimitive.Root {...props} {...useRootLayer(props, "menu")} />;
@@ -2026,21 +2039,10 @@ export const DropdownMenuSeparator = ({
 );
 export const DropdownMenuItem = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.Item>,
-  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Item> & {
-    icon?: string;
-    color?: string;
-  }
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Item> & MenuItemColorProps
 >(function Item({ className, icon: _icon, color, ...props }, ref) {
-  return (
-    <DropdownMenuPrimitive.Item
-      ref={ref}
-      data-live-guard={color === "red" || color === "status-red" ? "confirm" : undefined}
-      className={cn(menuItemClass, color === "red" && "text-red",
-        color === "status-red" && "text-status-red",
-        (color === "red" || color === "status-red") && destructiveHighlightClass, className)}
-      {...props}
-    />
-  );
+  const { liveGuard, toneClass } = menuItemTone(color);
+  return <DropdownMenuPrimitive.Item ref={ref} data-live-guard={liveGuard} className={cn(toneClass, className)} {...props} />;
 });
 // A submenu row: its trigger highlights while the submenu is open, and its
 // chevron points the way the submenu opens.
@@ -2307,21 +2309,10 @@ export const ContextMenuSeparator = ({
 );
 export const ContextMenuItem = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.Item>,
-  React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Item> & {
-    icon?: string;
-    color?: string;
-  }
+  React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Item> & MenuItemColorProps
 >(function ContextItem({ className, icon: _icon, color, ...props }, ref) {
-  return (
-    <ContextMenuPrimitive.Item
-      ref={ref}
-      data-live-guard={color === "red" || color === "status-red" ? "confirm" : undefined}
-      className={cn(menuItemClass, color === "red" && "text-red",
-        color === "status-red" && "text-status-red",
-        (color === "red" || color === "status-red") && destructiveHighlightClass, className)}
-      {...props}
-    />
-  );
+  const { liveGuard, toneClass } = menuItemTone(color);
+  return <ContextMenuPrimitive.Item ref={ref} data-live-guard={liveGuard} className={cn(toneClass, className)} {...props} />;
 });
 
 export const ContextMenuSub = ContextMenuPrimitive.Sub;

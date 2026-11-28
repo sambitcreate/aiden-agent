@@ -23,7 +23,6 @@
 .browser-floating-resize-northwest, .browser-floating-resize-northeast, .browser-floating-resize-southwest, .browser-floating-resize-southeast { width: 14px; height: 14px; }
 .browser-floating-resize-northwest { top: -6px; left: -6px; cursor: nwse-resize; } .browser-floating-resize-northeast { top: -6px; right: -6px; cursor: nesw-resize; }
 .browser-floating-resize-southwest { bottom: -6px; left: -6px; cursor: nesw-resize; } .browser-floating-resize-southeast { bottom: -6px; right: -6px; cursor: nwse-resize; }
-.browser-floating-header:focus-visible, .browser-floating-resize:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .browser-tab-strip { display: flex; min-width: 0; height: 40px; flex: 0 0 auto; align-items: center; gap: 5px; padding: 5px 9px; }
 .browser-tabs { display: flex; min-width: 0; flex: 1; gap: 3px; overflow-x: auto; scrollbar-width: thin; }
 .browser-tab { display: flex; min-width: 104px; max-width: 220px; height: 29px; flex: 1; align-items: center; padding: 0 4px 0 2px; border-radius: 10px; }
@@ -131,7 +130,6 @@
 .device-event-log-chevron { transition: transform 150ms ease-out; }
 .device-event-log-chevron[data-open] { transform: rotate(180deg); }
 .device-event-log-list { max-height: 16rem; min-height: 3rem; margin: 0; padding: 6px 8px; overflow-y: auto; border-radius: var(--radius-menu); background: var(--surface-well); list-style: none; font-family: var(--font-mono); font-size: calc(var(--text-small) - 1px); line-height: 1.55; outline: none; }
-.device-event-log-list:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .device-event-log-entry { display: flex; min-width: 0; gap: 8px; }
 .device-event-log-time { flex: 0 0 auto; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 .device-event-log-summary { min-width: 0; overflow-wrap: anywhere; }
@@ -208,7 +206,6 @@
 .browser-annotation-color input[type="color"] { width: 26px; flex: 0 0 auto; padding: 0; border: 0; background: transparent; }
 .browser-annotation-style-field input[type="range"] { accent-color: var(--text-secondary); }
 .browser-annotation-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.browser-tab-select:focus-visible, .browser-tab-close:focus-visible, .browser-select:focus-visible, .browser-recent-row > button:focus-visible, .browser-annotation-details summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 @keyframes browser-loading { 0% { transform: scaleX(.08); opacity: .45; } 75% { transform: scaleX(.8); opacity: .7; } 100% { transform: scaleX(1); opacity: .2; } }
 :root[data-reduce-motion="true"] .browser-chrome[data-loading="true"]::after { animation: none; opacity: .55; }
 
@@ -243,8 +240,6 @@
   --color-accent-text: var(--accent-text);
   --color-match: var(--text-match);
   --color-accent-foreground: var(--accent-foreground);
-  --color-accent-hover: var(--accent-hover);
-  --color-accent-active: var(--accent-active);
   --color-fill-accent: var(--fill-accent);
   --color-fill-accent-foreground: var(--fill-accent-foreground);
   --color-fill-accent-hover: var(--fill-accent-hover);
@@ -255,9 +250,7 @@
   --color-fill-danger-active: var(--fill-danger-active);
   --color-focus-ring: var(--focus-ring);
   --color-red: var(--support-red);
-  --color-red-foreground: var(--support-red-foreground);
   --color-green: var(--support-green);
-  --color-green-foreground: var(--support-green-foreground);
   --color-support-red: var(--support-red);
   --color-support-red-foreground: var(--support-red-foreground);
   --color-support-green: var(--support-green);
@@ -277,7 +270,6 @@
   --shadow-control-hover: var(--elevation-control-hover);
   --shadow-control-pressed: var(--elevation-control-pressed);
   --shadow-popover: var(--elevation-popover);
-  --shadow-toast: var(--elevation-toast);
   --shadow-dialog: var(--elevation-dialog);
   --shadow-modal: var(--elevation-modal);
   --shadow-onboarding: var(--elevation-onboarding);
@@ -458,7 +450,6 @@
   --fill-danger-foreground: #FFFFFF;
   --fill-danger-hover: #B8443F;
   --fill-danger-active: #A73E39;
-  --focus-ring: var(--text-primary);
   --status-accent: #71ACEC;
   --status-accent-surface: rgb(62 151 246 / 0.080);
   --status-red: #EFA3A1;
@@ -473,20 +464,6 @@
   --support-green-foreground: #000000;
   --support-warning: #FFB020;
   --support-warning-foreground: #000000;
-  --bot-avatar-lilac: #c6a9ff;
-  --bot-avatar-sky: #83d8ff;
-  --bot-avatar-mint: #88e8b1;
-  --bot-avatar-sun: #ffda7b;
-  --bot-avatar-periwinkle: #b2bcff;
-  --bot-avatar-coral: #ff9f9b;
-  --bot-avatar-peach: #ffc294;
-  --bot-avatar-aqua: #78e8df;
-  --bot-avatar-rose: #ffa3c7;
-  --bot-avatar-lime: #c6ec7e;
-  --bot-avatar-plum: #dda8f2;
-  --bot-avatar-graphite: #c5c5ce;
-  --bot-avatar-face: #292735;
-  --bot-avatar-marker: #2f7eea;
   /* Dark surfaces take the bot-avatar hues as-is. */
   --chart-1: var(--bot-avatar-sky);
   --chart-2: var(--bot-avatar-mint);
@@ -1081,6 +1058,7 @@ textarea {
    surface so scrolled text never shows through. State fills are layered on top
    rather than replacing the base, keeping hover/focus legible while stuck. */
 .transcript-sticky-header {
+  --transcript-sticky-base: var(--color-background);
   --transcript-sticky-surface: transparent;
   --transcript-sticky-state: transparent;
   position: sticky;
@@ -1089,7 +1067,7 @@ textarea {
   background:
     linear-gradient(var(--transcript-sticky-state), var(--transcript-sticky-state)),
     linear-gradient(var(--transcript-sticky-surface), var(--transcript-sticky-surface)),
-    var(--color-background);
+    var(--transcript-sticky-base);
 }
 
 .transcript-sticky-header[data-surface="well"] {
@@ -1107,10 +1085,7 @@ textarea {
 /* The side panel's helper chat sits on the popover surface, so its stuck step
    headers use that base instead of the main pane's background. */
 [data-subagent-helper-chat]:not([data-subagent-helper-expanded]) .transcript-sticky-header {
-  background:
-    linear-gradient(var(--transcript-sticky-state), var(--transcript-sticky-state)),
-    linear-gradient(var(--transcript-sticky-surface), var(--transcript-sticky-surface)),
-    var(--color-popover);
+  --transcript-sticky-base: var(--color-popover);
 }
 
 /* A collapse from a stuck header brings its section back into view below the
@@ -1282,11 +1257,6 @@ textarea {
 
 .settings-page .settings-field:has(> .settings-field-control:empty) {
   grid-template-columns: minmax(0, 1fr);
-}
-
-.settings-page :is(button, [role="button"], summary):focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
 }
 
 @container settings-content (max-width: 540px) {
@@ -1713,28 +1683,6 @@ textarea {
   to { opacity: 1; }
 }
 
-@keyframes aiden-environment-summary-in {
-  from {
-    opacity: 0;
-    transform: translateY(-4px) scale(var(--motion-popup-scale));
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes aiden-environment-summary-out {
-  from {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-  to {
-    opacity: 0;
-    transform: translateY(-2px) scale(0.99);
-  }
-}
-
 @keyframes aiden-app-update-banner-in {
   from {
     opacity: 0;
@@ -1788,10 +1736,10 @@ textarea {
     both;
 }
 :root[data-reduce-motion="false"] .quick-view-card[data-state="open"] {
-  animation: aiden-environment-summary-in var(--motion-duration) var(--motion-decelerate-easing) both;
+  animation: aiden-popover-in var(--motion-duration) var(--motion-decelerate-easing) both;
 }
 :root[data-reduce-motion="false"] .quick-view-card[data-state="closed"] {
-  animation: aiden-environment-summary-out 120ms ease-in both;
+  animation: aiden-popover-out 120ms ease-in both;
 }
 /* A Quick View card that appears mid-session (Context after the first message, Subagents after the first run). */
 @keyframes quick-view-card-enter {
@@ -1807,21 +1755,14 @@ textarea {
 :root[data-reduce-motion="false"] .quick-view-card-slot[data-entering] {
   animation: quick-view-card-enter var(--motion-large-duration) var(--motion-large-easing) both;
 }
-:root[data-reduce-motion="false"] .app-update-banner[data-state="open"] {
-  animation: aiden-app-update-banner-in 150ms var(--motion-easing)
-    both;
+:root[data-reduce-motion="false"] .app-update-banner[data-state="open"],
+:root[data-reduce-motion="false"] .assistant-automation-approval[data-state="open"],
+:root[data-reduce-motion="false"] .scheduled-task-detail[data-state="open"],
+:root[data-reduce-motion="false"] .usage-data-notice[data-state="open"] {
+  animation: aiden-app-update-banner-in 150ms var(--motion-easing) both;
 }
 :root[data-reduce-motion="false"] .app-update-banner[data-state="closed"] {
   animation: aiden-app-update-banner-out 120ms ease-in both;
-}
-:root[data-reduce-motion="false"] .assistant-automation-approval[data-state="open"] {
-  animation: aiden-app-update-banner-in 150ms var(--motion-easing) both;
-}
-:root[data-reduce-motion="false"] .scheduled-task-detail[data-state="open"] {
-  animation: aiden-app-update-banner-in 150ms var(--motion-easing) both;
-}
-:root[data-reduce-motion="false"] .usage-data-notice[data-state="open"] {
-  animation: aiden-app-update-banner-in 150ms var(--motion-easing) both;
 }
 :root[data-reduce-motion="false"] .agent-thinking-shimmer {
   color: transparent;
@@ -2097,26 +2038,6 @@ textarea {
   flex: 0 0 auto;
 }
 
-.appearance-heading {
-  margin: 0 4px 26px;
-}
-
-.appearance-heading h1 {
-  margin: 0;
-  color: var(--text-primary);
-  font-size: 26px;
-  font-weight: 600;
-  letter-spacing: -0.025em;
-  line-height: 32px;
-}
-
-.appearance-heading p {
-  margin: 6px 0 0;
-  color: var(--text-secondary);
-  font-size: var(--text-small);
-  line-height: 1.5;
-}
-
 .appearance-theme-section > h2 {
   margin: 0 4px 12px;
   color: var(--text-primary);
@@ -2187,7 +2108,10 @@ textarea {
   gap: 16px 10px;
 }
 
-.appearance-tile {
+/* Choice cards communicate selection through the label's list-selection fill,
+   never a decorative border; keyboard focus keeps the neutral focus ring. */
+.appearance-tile,
+.appearance-width-option {
   display: flex;
   min-width: 0;
   flex-direction: column;
@@ -2195,10 +2119,13 @@ textarea {
   gap: 7px;
   padding: 0;
   border: 0;
-  border-radius: 14px;
   background: transparent;
   color: var(--text-secondary);
   outline: none;
+}
+
+.appearance-tile {
+  border-radius: 14px;
 }
 
 .appearance-tile:focus-visible {
@@ -2222,7 +2149,8 @@ textarea {
   user-select: none;
 }
 
-.appearance-tile:hover .appearance-tile-swatch {
+.appearance-tile:hover .appearance-tile-swatch,
+.appearance-width-option:hover .appearance-width-preview {
   box-shadow: var(--elevation-control-hover);
 }
 
@@ -2259,14 +2187,16 @@ textarea {
   height: 11px;
 }
 
-.appearance-tile-label {
+.appearance-tile-label,
+.appearance-width-option-label {
   padding: 3px 9px;
   border-radius: var(--radius-control);
   font-size: var(--text-small);
   font-weight: 500;
 }
 
-.appearance-tile[aria-checked="true"] .appearance-tile-label {
+.appearance-tile[aria-checked="true"] .appearance-tile-label,
+.appearance-width-option[aria-checked="true"] .appearance-width-option-label {
   background: var(--surface-list-selection);
   color: var(--text-primary);
 }
@@ -2298,20 +2228,8 @@ textarea {
   gap: 10px;
 }
 
-/* Choice cards communicate selection through the label's list-selection fill,
-   never a decorative border; keyboard focus keeps the neutral focus ring. */
 .appearance-width-option {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  align-items: center;
-  gap: 7px;
-  padding: 0;
-  border: 0;
   border-radius: 13px;
-  background: transparent;
-  color: var(--text-secondary);
-  outline: none;
 }
 
 .appearance-width-option:focus-visible {
@@ -2330,10 +2248,6 @@ textarea {
   background: var(--surface-popover);
   box-shadow: var(--elevation-control);
   transition: box-shadow 150ms ease-out;
-}
-
-.appearance-width-option:hover .appearance-width-preview {
-  box-shadow: var(--elevation-control-hover);
 }
 
 .appearance-width-preview-column {
@@ -2361,18 +2275,6 @@ textarea {
 }
 .appearance-width-preview-column i:nth-child(2) { width: 100%; }
 .appearance-width-preview-column i:nth-child(3) { width: 84%; }
-
-.appearance-width-option-label {
-  padding: 3px 9px;
-  border-radius: var(--radius-control);
-  font-size: var(--text-small);
-  font-weight: 500;
-}
-
-.appearance-width-option[aria-checked="true"] .appearance-width-option-label {
-  background: var(--surface-list-selection);
-  color: var(--text-primary);
-}
 
 /* Settings → Appearance → Sidebar: the width picker's cards, three across,
    each previewing the sidebar's rows instead of a chat column. */
@@ -2814,7 +2716,7 @@ textarea {
 }
 .aiden-live-mark > .aiden-mark { width: 100% !important; height: 100% !important; animation: aiden-live-mark-in 280ms ease both; }
 @keyframes aiden-live-mark-in { from { opacity: 0; } to { opacity: 1; } }
-:root[data-reduce-motion="true"] .aiden-live-mark { transition: none; }
+:root[data-reduce-motion="true"] .aiden-live-mark { transform: none; transition: none; }
 :root[data-reduce-motion="true"] .aiden-live-mark > .aiden-mark { animation: none; }
 
 /* ───────── Activity marks ─────────
@@ -3080,10 +2982,6 @@ textarea {
 .gemini-live-hud-error {
   margin: 0 0.75rem 0.75rem;
   padding: 0.625rem 0.75rem;
-}
-:root[data-reduce-motion="true"] .aiden-live-mark {
-  transform: none;
-  transition: none;
 }
 
 /* Aiden Live's floating ribbon: a dark glass pill above the chat composer.

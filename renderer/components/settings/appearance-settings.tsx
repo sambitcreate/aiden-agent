@@ -529,7 +529,7 @@ export function AppearanceSettings() {
 
   return (
     <div className="appearance-page" aria-busy={!hydrated} inert={!hydrated ? true : undefined}>
-      <div className="settings-page-heading appearance-heading">
+      <div className="settings-page-heading">
         <h1>Appearance</h1>
         <p>Pick a theme, choose when Aiden uses its light or dark look, and set how wide conversations read.</p>
       </div>
