@@ -2281,6 +2281,35 @@ test("3c: appPageVariant checks the permission again inside the file's lock, and
   }
 });
 
+/** Runs `retarget` on the stored canvas just before the handler's own update, as another save landing first would. */
+function saveLandsFirst(store: unknown, retarget: (frame: DesignFrame) => DesignFrame) {
+  const internals = store as { update: (...args: unknown[]) => Promise<unknown> };
+  const update = internals.update.bind(store);
+  internals.update = async (chatId, ...rest) => {
+    internals.update = update;
+    await update(chatId, (doc: DesignCanvas) => ({ ...doc, frames: doc.frames.map((frame) => (frame.id === "app-1" ? retarget(frame) : frame)) }));
+    return update(chatId, ...rest);
+  };
+}
+
+test("3c: a frame another save pointed at another page meanwhile gets no copy and no Trash", async (t) => {
+  for (const retarget of [(frame: DesignFrame) => ({ ...frame, route: "/about" }), (frame: DesignFrame) => ({ ...frame, appRoot: "web" })]) {
+    const copy = await pageFixture(t, { files: { "src/routes/pricing.tsx": PLAIN_PAGE, "src/routes/about.tsx": PLAIN_PAGE } });
+    await seedFrames(copy.store, pageApp());
+    saveLandsFirst(copy.store, retarget);
+    assert.deepEqual(await copy.invoke("designCanvas:appPageVariant", "chat-1", { frameId: "app-1" }), { error: "not-found" });
+    const frames = ((await copy.invoke("designCanvas:get", "chat-1")) as DesignCanvas).frames;
+    assert.deepEqual(frames.map((frame) => frame.id), ["app-1"], "no variant placed");
+    assert.equal(await exists(path.join(copy.workspace, "src/routes/pricing-v2.tsx")), false, "the written copy is taken back");
+
+    const trash = await pageFixture(t, { files: { "src/routes/pricing.tsx": PLAIN_PAGE, "src/routes/about.tsx": PLAIN_PAGE } });
+    await seedFrames(trash.store, pageApp());
+    saveLandsFirst(trash.store, retarget);
+    assert.deepEqual(await trash.invoke("designCanvas:appPageTrash", "chat-1", { frameId: "app-1" }), { error: "not-found" });
+    assert.deepEqual(trash.trashed, [], "no file trashed");
+  }
+});
+
 test("3c: appPageTrash moves the single owning file to the Trash and removes its frames across the workspace", async (t) => {
   const { invoke, store, workspace, trashed, broadcasts } = await pageFixture(t, {
     files: { "src/routes/pricing.tsx": PLAIN_PAGE, "src/routes/about.tsx": PLAIN_PAGE },

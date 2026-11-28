@@ -121,6 +121,36 @@ test("the toast's Undo undoes nothing once the canvas has moved on", async () =>
   assert.ok(await screen.findByText(/The canvas changed since the Trash\. Press (⌘Z|Ctrl\+Z) to undo it\./u));
 });
 
+test("two pages trashed one after the other each get their toast once the canvas shows them", async () => {
+  const about: DesignFrame = { ...app, id: "app-2", title: "About", route: "/about" };
+  const replies = [
+    { trashed: "src/routes/pricing.tsx", route: "/pricing", removed: ["app-1"], revision: 9 },
+    { trashed: "src/routes/about.tsx", route: "/about", removed: ["app-2"], revision: 10 },
+  ];
+  installBotTestIpc({ "designCanvas:appPageTrash": () => replies.shift() });
+  render(<Toaster />);
+  const latestDoc: { current: DesignCanvas } = { current: { ...emptyDesignCanvas(), revision: 8, frames: [app, about] } };
+  const undone: number[] = [];
+  const { result, rerender } = renderHook(({ doc }: { doc: DesignCanvas }) =>
+    useAppPageActions({ chatId: "chat-1", doc, latestDoc, flush: async () => true, undo: () => undone.push(1), queueOnFrame: () => true, focusCanvas: () => undefined }),
+  { initialProps: { doc: latestDoc.current } });
+  const show = (doc: DesignCanvas) => {
+    latestDoc.current = doc;
+    rerender({ doc });
+  };
+  // The second Trash lands while the first still waits for its revision.
+  act(() => result.current.trashAppPage("app-1"));
+  await settle();
+  act(() => result.current.trashAppPage("app-2"));
+  await settle();
+  show({ ...emptyDesignCanvas(), revision: 9, frames: [about] });
+  await settle();
+  assert.ok(await screen.findByText("Moved src/routes/pricing.tsx to the Trash."), "the first Trash's toast");
+  show({ ...emptyDesignCanvas(), revision: 10, frames: [] });
+  await settle();
+  assert.ok(await screen.findByText("Moved src/routes/about.tsx to the Trash."), "and the second's");
+});
+
 test("Ask Aiden's copy note names the page's first variant", () => {
   assert.equal(firstVariantPath("/pricing?plan=pro"), "/pricing-v2");
   assert.equal(firstVariantPath("/pricing-v3/"), "/pricing-v2");

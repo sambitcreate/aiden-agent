@@ -1068,6 +1068,10 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     return { chat, workspaceId, live, trash: asked.live.trash, real: folder.real, doc, frame, appRoot, page, framework, walk, owner: owned.owner };
   };
 
+  /** Whether `current` still shows the page `pageFileContext` read: the same app root and page path (Pullfrog r4724521921). */
+  const showsSamePage = (current: DesignFrame | undefined, appRoot: string, page: { path: string }): boolean =>
+    current?.kind === "app" && current.route !== undefined && (current.appRoot ?? ".") === appRoot && pagePath(current.route).path === page.path;
+
   /** The owner's bytes through a confined, no-follow read. */
   const ownerBytes = async (real: string, file: string): Promise<{ bytes: Buffer; mode: number; absolute: string } | { error: AppPageRefusal | "io" }> => {
     const target = await confinedTarget(real, file, { create: false, ...(deps.pageFs ? { fs: deps.pageFs } : {}) });
@@ -1158,7 +1162,8 @@ export function registerDesignCanvasHandlers<Event>(deps: {
         chat.id,
         (latest) => {
           const current = latest.frames.find((entry) => entry.id === frame.id);
-          if (!current || current.kind !== "app") {
+          // Another save may have pointed the frame at another page since the file was chosen.
+          if (!current || !showsSamePage(current, appRoot, page)) {
             outcome = { error: "not-found" };
             throw UNCHANGED;
           }
@@ -1254,6 +1259,11 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       const update = await deps.store.update(
         chat.id,
         (latest) => {
+          // The frame asked about must still show the page whose file was chosen; another save may have moved it.
+          if (!showsSamePage(latest.frames.find((entry) => entry.id === frame.id), appRoot, page)) {
+            outcome = { error: "not-found" };
+            throw UNCHANGED;
+          }
           const frames = latest.frames.filter(ofPage);
           if (frames.length === 0) {
             outcome = { error: "not-found" };

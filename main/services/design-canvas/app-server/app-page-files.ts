@@ -5,7 +5,7 @@
 // file; the rules live in `app-page-files-core.ts` and `app-routes-core.ts`.
 
 import { constants as fsConstants, type Stats } from "node:fs";
-import { lstat, mkdir, open, realpath, rmdir, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, realpath, rmdir, unlink, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { FrameworkId } from "../../../../renderer/shared/design-app.js";
 import { isPathInside } from "../../../shared/path-containment.js";
@@ -139,12 +139,107 @@ export type PageFileFs = {
 const DEFAULT_PAGE_FS: PageFileFs = {
   lstat: (target) => lstat(target),
   realpath: (target) => realpath(target),
-  mkdir: async (dir) => {
-    await mkdir(dir);
-  },
+  mkdir: (dir) => makePageFolder(dir),
   rmdir: (dir) => rmdir(dir),
-  writeFile: (file, bytes, mode) => writeFile(file, bytes, { flag: "wx", mode }),
+  writeFile: (file, bytes, mode) => createPageFile(file, bytes, mode),
 };
+
+/** Thrown when what was made would not be where its confined path says: a folder above it was swapped meanwhile. */
+const MOVED = "EAIDENMOVED";
+const moved = () => Object.assign(new Error("The folder moved while the file was made."), { code: MOVED });
+
+/** Linux names an open folder itself through `/proc/self/fd`, so a name inside it is looked up in that inode, whatever the path says. */
+const BY_HANDLE = process.platform === "linux";
+
+/** A folder opened without following a link, while it is the folder at its own real path. */
+async function openHeldFolder(dir: string): Promise<FileHandle> {
+  const handle = await open(dir, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
+  try {
+    if (!(await stillAt(handle, dir))) throw moved();
+    return handle;
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+/** Whether `dir` is still the open folder: the same inode, at its own real path. */
+async function stillAt(handle: FileHandle, dir: string): Promise<boolean> {
+  try {
+    const [held, now, real] = await Promise.all([handle.stat(), lstat(dir), realpath(dir)]);
+    return real === dir && now.isDirectory() && held.dev === now.dev && held.ino === now.ino;
+  } catch {
+    return false;
+  }
+}
+
+/** Whether `name` in the held folder is the inode `info` (looked up through the handle on Linux). */
+async function holds(folder: FileHandle, file: string, info: Stats): Promise<boolean> {
+  try {
+    const entry = await lstat(BY_HANDLE ? `/proc/self/fd/${folder.fd}/${path.basename(file)}` : file);
+    return entry.dev === info.dev && entry.ino === info.ino;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * One new folder, made in its parent's verified handle on Linux. On macOS it
+ * is made by path; `confinedTarget`'s real-path check after it refuses a
+ * folder an ancestor swap sent elsewhere, but the empty folder stays there
+ * (no handle-relative mkdir in Node).
+ */
+async function makePageFolder(dir: string): Promise<void> {
+  if (!BY_HANDLE) {
+    await mkdir(dir);
+    return;
+  }
+  const parent = await openHeldFolder(path.dirname(dir));
+  try {
+    await mkdir(`/proc/self/fd/${parent.fd}/${path.basename(dir)}`);
+  } finally {
+    await parent.close().catch(() => undefined);
+  }
+}
+
+/**
+ * Creates `file` (S95's confined write; Pullfrog r4724521914). The folder is
+ * opened no-follow and must be the inode at its own real path; the file is
+ * made empty with `O_EXCL | O_NOFOLLOW`; then it must be in that folder, and
+ * the folder still at its path, before a byte is written through the new
+ * file's handle. On Linux the create goes through `/proc/self/fd/N/name`, so
+ * the file lands in the verified folder whatever the path names meanwhile,
+ * and one that lands in a folder moved away since is unlinked through the
+ * same handle. macOS has no handle-relative create in Node: a swap of a
+ * folder above it, exactly across the create and put back before the check,
+ * can leave one empty file (this mode, no bytes) in the folder the link
+ * named. It is refused, and never written. `between` is a test hook between
+ * the folder's check and the create.
+ */
+export async function createPageFile(file: string, bytes: Buffer, mode: number, between?: () => Promise<void>): Promise<void> {
+  const folder = await openHeldFolder(path.dirname(file));
+  let created: FileHandle | undefined;
+  const at = BY_HANDLE ? `/proc/self/fd/${folder.fd}/${path.basename(file)}` : file;
+  try {
+    await between?.();
+    created = await open(at, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW, mode);
+    const info = await created.stat();
+    if (!(await holds(folder, file, info)) || !(await stillAt(folder, path.dirname(file)))) {
+      // Linux reaches it through the folder's handle; on macOS the path no longer names it, so it stays empty where it is.
+      if (BY_HANDLE && (await holds(folder, file, info))) await unlink(at).catch(() => undefined);
+      throw moved();
+    }
+    try {
+      await created.writeFile(bytes);
+    } catch (error) {
+      if (await holds(folder, file, info)) await unlink(at).catch(() => undefined);
+      throw error;
+    }
+  } finally {
+    await created?.close().catch(() => undefined);
+    await folder.close().catch(() => undefined);
+  }
+}
 
 type TargetRefusal = { ok: false; reason: "outside" | "link" | "io" | "exists" };
 
@@ -257,6 +352,7 @@ export async function writeConfinedFile(
     return target;
   } catch (error) {
     if (target.createdFolder) await fs.rmdir(target.createdFolder).catch(() => undefined);
-    return { ok: false, reason: errorCode(error) === "EEXIST" ? "exists" : "io" };
+    const code = errorCode(error);
+    return { ok: false, reason: code === "EEXIST" ? "exists" : code === MOVED ? "link" : "io" };
   }
 }
