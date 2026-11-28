@@ -69,8 +69,8 @@ export function namedHosts(text: string): Set<string> {
     const end = start + raw.length;
     const prev = start > 0 ? withoutUrls[start - 1] : undefined;
     const next = end < withoutUrls.length ? withoutUrls[end] : undefined;
-    // Skip filesystem paths, dotfiles, emails and method calls.
-    if (prev === "/" || prev === "\\" || prev === "." || prev === "@" || next === "(") continue;
+    // Skip filesystem paths, dotfiles, emails (either side of `@`) and method calls.
+    if (prev === "/" || prev === "\\" || prev === "." || prev === "@" || next === "(" || next === "@") continue;
     const normalized = raw.toLowerCase().replace(/^www\./, "");
     const suffix = normalized.slice(normalized.lastIndexOf(".") + 1);
     if (FILE_EXTENSION_SUFFIXES.has(suffix)) continue;

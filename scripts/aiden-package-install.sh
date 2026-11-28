@@ -32,8 +32,10 @@ case "$expected_sha512" in "" | *[!0-9a-f]*) exit 2 ;; esac
 case "$expected_version" in "" | *[!0-9.]* | .* | *.) exit 2 ;; esac
 
 # Refuse symlinks, special files (FIFOs/devices), empty files and oversized
-# downloads before root copies anything into /var/tmp. `iflag=nofollow,nonblock`
-# also closes the swap window between the stat pre-check and reading bytes.
+# downloads before root copies anything into /var/tmp. If the source changes
+# after the pre-check, `iflag=nofollow,nonblock` still rejects symlinks and
+# avoids blocking on FIFOs, `count=1025` bounds the bytes copied into /var/tmp,
+# and the staged size, SHA-512 and package-identity checks govern the install.
 max_bytes=1073741824
 [ ! -L "$source" ] && [ -f "$source" ] || exit 3
 source_size=$(stat -c %s -- "$source" 2>/dev/null) || exit 3
