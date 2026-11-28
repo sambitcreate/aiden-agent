@@ -17,6 +17,7 @@ import { createBotEventRoutineStore, type BotEventRoutine } from "./store.js";
 import { createBotWatches } from "./watch.js";
 import { productionConnectorWatchService } from "./connector-host-main.js";
 import { checkBotWatchSource } from "./watch-sources.js";
+import { botPublicOnlyFetch } from "../public-only-fetch.js";
 import { createKeyedSerial } from "../bot-routine-notes.js";
 import { createBotWebhookHandler } from "./webhook.js";
 
@@ -240,11 +241,13 @@ const watches = createBotWatches({
   check: (routine, signal) => {
     if (routine.trigger.kind !== "watch") return Promise.resolve({ ok: false as const, error: "Not a watch." });
     if (routine.trigger.source.type === "connector") return botConnectorWatches.check(routine, signal);
+    const publicOnly = routine.trigger.source.type === "url" && routine.trigger.agentProposed === true;
     return checkBotWatchSource(routine.trigger.source, async () => {
       const { botManagedWorkspace } = await import("../bot-capability-services-main.js");
       return (await botManagedWorkspace.resolve(routine.botId)).homePath;
     }, {
       signal,
+      ...(publicOnly ? { fetch: botPublicOnlyFetch } : {}),
       // A script runs only under the Bot's current Shell access.
       authorize: async () => (await import("../bot-runtime/bot-session-main.js")).admitBotShellWork(routine.botId),
     });

@@ -888,7 +888,7 @@ test("a Bot proposes a watch through the routines tool, and Add routine saves it
   assert.equal(proposed.ok, true);
   assert.equal(cards.length, 1, "the card lands in the calling conversation");
   const card = cards[0]!.data as { trigger: unknown; label: string };
-  assert.deepEqual(card.trigger, { kind: "watch", source: { type: "url", url: "https://example.com/notes" }, everyMinutes: 15 });
+  assert.deepEqual(card.trigger, { kind: "watch", source: { type: "url", url: "https://example.com/notes" }, everyMinutes: 15, agentProposed: true });
   assert.match(card.label, /15 min/u);
   assert.match(card.label, /example\.com\/notes/u);
   assert.deepEqual(await events.list("bot-a"), [], "proposing creates nothing and checks nothing");
@@ -899,6 +899,7 @@ test("a Bot proposes a watch through the routines tool, and Add routine saves it
   assert.equal(accepted.token, undefined, "a watch has no link to show");
   assert.equal(saved?.enabled, true);
   assert.deepEqual(saved?.trigger, card.trigger);
+  assert.equal(saved?.sourceProposalId, String(proposed.proposalId));
   assert.equal(saved?.watch?.hash, undefined, "the first check is still to come");
   assert.equal(saved?.watch?.nextCheckAt, at);
   assert.equal(saved?.watch?.failures, 0);
@@ -910,4 +911,141 @@ test("a Bot proposes a watch through the routines tool, and Add routine saves it
   const longCard = cards[cards.length - 1]!.data as { label: string };
   assert.ok(longCard.label.includes(`https://${host}/`), longCard.label);
   assert.ok(longCard.label.length < 160, "only the path is shortened");
+});
+
+test("pre-upgrade pending URL watch cards without agentProposed still match shownProposal and save agentProposed: true", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "aiden-watch-legacy-card-"));
+  roots.push(root);
+  const at = Date.UTC(2026, 9, 28, 16);
+  const events = createBotEventRoutineStore({ profileDir: () => root, now: () => at });
+  const appended: Array<{ botId: string; kind: string; data: Record<string, unknown> }> = [];
+  const { routines } = harness();
+  const proposals = createBotRoutineProposalService({
+    profileDir: () => root,
+    routines,
+    eventRoutines: events,
+    defaultTimezone: () => "UTC",
+    appendEntry: async (botId, kind, data) => {
+      // Simulate a pre-upgrade conversation entry written without `agentProposed` on `data.trigger`.
+      if (kind === BOT_ROUTINE_PROPOSAL_ENTRY_KIND && data.trigger && typeof data.trigger === "object") {
+        const { agentProposed: _omitted, ...legacyTrigger } = data.trigger as Record<string, unknown>;
+        appended.push({ botId, kind, data: { ...data, trigger: legacyTrigger } });
+        return;
+      }
+      appended.push({ botId, kind, data });
+    },
+    conversationEntries: async (botId) => appended.filter((entry) => entry.botId === botId),
+    now: () => at,
+    newId: () => "00000000-0000-4000-8000-000000000099",
+  });
+
+  const proposed = await proposals.propose("bot-a", {
+    name: "Legacy Status Card",
+    prompt: "Summarize changes.",
+    trigger: { kind: "watch", source: { type: "url", url: "https://example.com/status" }, everyMinutes: 15 },
+  });
+  assert.ok(proposed.ok);
+  assert.equal((appended[0]!.data.trigger as Record<string, unknown>).agentProposed, undefined, "history lacks agentProposed");
+  assert.equal((await proposals.pending("bot-a")).length, 1, "shownProposal normalizes URL watch before contentKey comparison");
+
+  const accepted = await proposals.respond(
+    parseBotRoutineProposalRespond({ botId: "bot-a", proposalId: proposed.proposal.proposalId, decision: "accept" }),
+  );
+  assert.equal(accepted.status, "accepted");
+  const [saved] = await events.list("bot-a");
+  assert.deepEqual(saved?.trigger, {
+    kind: "watch",
+    source: { type: "url", url: "https://example.com/status" },
+    everyMinutes: 15,
+    agentProposed: true,
+  });
+});
+
+test("accepting a proposed URL watch whose hostname resolves to 127.0.0.1 records error with zero loopback HTTPS hits", async (t) => {
+  const dns = (await import("node:dns")).default;
+  const { createServer: createHttpsServer } = await import("node:https");
+  const { loadOrCreateAidenRemoteTlsIdentity } = await import("./aiden-remote-tls-identity.js");
+  const { createBotWatches } = await import("./bot-routine-events/watch.js");
+  const { checkBotWatchSource } = await import("./bot-routine-events/watch-sources.js");
+  const { botPublicOnlyFetch } = await import("./public-only-fetch.js");
+
+  const root = mkdtempSync(path.join(os.tmpdir(), "aiden-watch-ssrf-proof-"));
+  roots.push(root);
+  const tlsIdentity = await loadOrCreateAidenRemoteTlsIdentity({ directory: path.join(root, "tls"), hostnames: ["internal-corp.example"] });
+  const hits: string[] = [];
+  const server = createHttpsServer({ key: tlsIdentity.privateKey, cert: tlsIdentity.certificateChain }, (request, response) => {
+    hits.push(request.url ?? "/");
+    response.end("secret internal status");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const internalPort = (server.address() as import("node:net").AddressInfo).port;
+
+  const originalLookup = dns.lookup;
+  t.after(() => { dns.lookup = originalLookup; });
+  dns.lookup = ((hostname: string, options: unknown, callback?: unknown) => {
+    const cb = (typeof options === "function" ? options : callback) as (err: NodeJS.ErrnoException | null, address: unknown, family?: number) => void;
+    if (hostname === "internal-corp.example") {
+      if (typeof options === "object" && options !== null && "all" in options && (options as { all?: boolean }).all) {
+        cb(null, [{ address: "127.0.0.1", family: 4 }]);
+        return;
+      }
+      cb(null, "127.0.0.1", 4);
+      return;
+    }
+    return (originalLookup as (...args: unknown[]) => unknown)(hostname, options, callback);
+  }) as typeof dns.lookup;
+
+  const at = Date.UTC(2026, 9, 28, 17);
+  const events = createBotEventRoutineStore({ profileDir: () => root, now: () => at });
+  const appended: Array<{ botId: string; kind: string; data: Record<string, unknown> }> = [];
+  const { routines } = harness();
+  const botRoutineProposals = createBotRoutineProposalService({
+    profileDir: () => root,
+    routines,
+    eventRoutines: events,
+    defaultTimezone: () => "UTC",
+    appendEntry: async (botId, kind, data) => void appended.push({ botId, kind, data }),
+    conversationEntries: async (botId) => appended.filter((entry) => entry.botId === botId),
+    now: () => at,
+    newId: () => "00000000-0000-4000-8000-000000000077",
+  });
+
+  const watches = createBotWatches({
+    routines: () => events.all(),
+    store: events,
+    check: (routine, signal) => {
+      if (routine.trigger.kind !== "watch") return Promise.resolve({ ok: false as const, error: "Not a watch." });
+      if (routine.trigger.source.type === "connector") return Promise.resolve({ ok: false as const, error: "Not a connector watch." });
+      const publicOnly = routine.trigger.source.type === "url" && routine.trigger.agentProposed === true;
+      return checkBotWatchSource(routine.trigger.source, async () => root, {
+        signal,
+        ...(publicOnly ? { fetch: botPublicOnlyFetch } : {}),
+        authorize: async () => ({ error: "Shell access is off." }),
+      });
+    },
+    dispatcher: { emit: async () => "queued" },
+    isPaused: async () => false,
+    paused: async () => undefined,
+    recovered: async () => undefined,
+    now: () => at,
+    setTimer: () => ({ cancel() {} }),
+  });
+  t.after(() => watches.dispose());
+
+  const proposed = await botRoutineProposals.propose("bot-a", {
+    name: "Internal HTTPS Status Watch",
+    prompt: "Summarize changes on the status endpoint.",
+    trigger: { kind: "watch", source: { type: "url", url: `https://internal-corp.example:${internalPort}/status` }, everyMinutes: 5 },
+  });
+  assert.ok(proposed.ok);
+  const accepted = await botRoutineProposals.respond(
+    parseBotRoutineProposalRespond({ botId: "bot-a", proposalId: proposed.proposal.proposalId, decision: "accept" }),
+  );
+  assert.equal(accepted.status, "accepted");
+  await watches.checkNow("bot-a", accepted.routineId!);
+  const [routineAfterBaseline] = await events.list("bot-a");
+  assert.equal(routineAfterBaseline?.watch?.lastResult, "error");
+  assert.match(routineAfterBaseline?.watch?.lastError ?? "", /internal-corp\.example points at this computer or a private network, which a watch a Bot proposed can't check\. Set it up yourself in the Bot's profile to watch it\./u);
+  assert.equal(hits.length, 0);
 });

@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
+import dns from "node:dns";
+import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import type { AddressInfo } from "node:net";
+import * as os from "node:os";
+import * as path from "node:path";
 import test from "node:test";
 import { isPrivateIpAddress } from "../../renderer/shared/scheduled-task-trigger.js";
+import { loadOrCreateAidenRemoteTlsIdentity } from "./aiden-remote-tls-identity.js";
 import { fetchBotWatchUrl } from "./bot-routine-events/watch-sources.js";
-import { createPublicOnlyFetch } from "./public-only-fetch.js";
+import { botPublicOnlyFetch, createPublicOnlyFetch } from "./public-only-fetch.js";
 
 async function localServer(t: test.TestContext) {
   let hits = 0;
@@ -26,11 +32,66 @@ test("a watch Aiden proposed refuses a name that resolves to this computer or a 
     const fetch = createPublicOnlyFetch({ resolve: resolvesTo(...addresses) });
     const check = await fetchBotWatchUrl("https://status.example.com/", { fetch });
     assert.equal(check.ok, false, addresses.join(", "));
-    assert.match(!check.ok ? check.error : "", /status\.example\.com points at this computer or a private network/u);
+    assert.match(!check.ok ? check.error : "", /status\.example\.com points at this computer or a private network, which a watch Aiden proposed can't check\. Set it up yourself in the task editor to watch it\./u);
   }
   const literal = await fetchBotWatchUrl(`https://[::ffff:7f00:1]:${server.port}/`, { fetch: createPublicOnlyFetch({ resolve: resolvesTo("93.184.215.14") }) });
   assert.equal(literal.ok, false, "an IP literal is checked without a lookup");
   assert.equal(server.hits(), 0, "nothing ever reached the private address");
+});
+
+test("a watch a Bot proposed refuses loopback and private DNS answers with Bot profile guidance, before connecting", async (t) => {
+  const certDir = mkdtempSync(path.join(os.tmpdir(), "aiden-bot-public-fetch-"));
+  t.after(() => rmSync(certDir, { recursive: true, force: true }));
+  const tlsIdentity = await loadOrCreateAidenRemoteTlsIdentity({ directory: certDir, hostnames: ["internal-corp.example"] });
+  let hits = 0;
+  let connections = 0;
+  const server = createHttpsServer({ key: tlsIdentity.privateKey, cert: tlsIdentity.certificateChain }, (_request, response) => {
+    hits += 1;
+    response.end("internal: secret");
+  });
+  server.on("connection", () => { connections += 1; });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const port = (server.address() as AddressInfo).port;
+
+  for (const addresses of [["127.0.0.1"], ["::1"], ["10.1.2.3"], ["93.184.215.14", "172.16.0.5"], ["::ffff:127.0.0.1"], ["fe80::1"]]) {
+    const fetch = createPublicOnlyFetch({ surface: "bot", resolve: resolvesTo(...addresses) });
+    const check = await fetchBotWatchUrl(`https://internal-corp.example:${port}/status`, { fetch });
+    assert.equal(check.ok, false, addresses.join(", "));
+    assert.equal(
+      !check.ok ? check.error : "",
+      "internal-corp.example points at this computer or a private network, which a watch a Bot proposed can't check. Set it up yourself in the Bot's profile to watch it.",
+    );
+  }
+
+  const literal = await fetchBotWatchUrl(`https://[fd00::1]:${port}/status`, {
+    fetch: createPublicOnlyFetch({ surface: "bot", resolve: resolvesTo("93.184.215.14") }),
+  });
+  assert.equal(literal.ok, false);
+  assert.match(!literal.ok ? literal.error : "", /Set it up yourself in the Bot's profile to watch it\.$/u);
+
+  const originalLookup = dns.lookup;
+  t.after(() => { dns.lookup = originalLookup; });
+  dns.lookup = ((hostname: string, options: unknown, callback?: unknown) => {
+    const cb = (typeof options === "function" ? options : callback) as (err: NodeJS.ErrnoException | null, address: unknown, family?: number) => void;
+    if (hostname === "internal-corp.example") {
+      if (typeof options === "object" && options !== null && "all" in options && (options as { all?: boolean }).all) {
+        cb(null, [{ address: "127.0.0.1", family: 4 }]);
+        return;
+      }
+      cb(null, "127.0.0.1", 4);
+      return;
+    }
+    return (originalLookup as (...args: unknown[]) => unknown)(hostname, options, callback);
+  }) as typeof dns.lookup;
+
+  const systemCheck = await fetchBotWatchUrl(`https://internal-corp.example:${port}/status`, { fetch: botPublicOnlyFetch });
+  assert.deepEqual(systemCheck, {
+    ok: false,
+    error: "internal-corp.example points at this computer or a private network, which a watch a Bot proposed can't check. Set it up yourself in the Bot's profile to watch it.",
+  });
+  assert.equal(hits, 0, "no HTTPS request reached loopback");
+  assert.equal(connections, 0, "no TCP socket opened to loopback");
 });
 
 test("the connection goes to the address that was checked, not to a second lookup", async (t) => {

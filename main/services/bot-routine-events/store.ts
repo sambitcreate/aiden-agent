@@ -232,6 +232,14 @@ function parseRoutine(value: unknown, botId: string): BotEventRoutine | undefine
   } catch {
     return undefined;
   }
+  if (
+    trigger.kind === "watch" &&
+    trigger.source.type === "url" &&
+    typeof record.sourceProposalId === "string" &&
+    trigger.agentProposed === undefined
+  ) {
+    trigger = { ...trigger, agentProposed: true };
+  }
   const connector = parseConnectorPrivate(record.connector);
   if (trigger.kind === "watch" && trigger.source.type === "connector" && (!connector || trigger.source.watchId !== record.id)) throw new ConnectorWatchStorageError();
   if (trigger.kind === "webhook" && (typeof record.tokenHash !== "string" || !/^[a-f0-9]{64}$/u.test(record.tokenHash))) return undefined;
@@ -372,7 +380,14 @@ export function createBotEventRoutineStore(options: { profileDir(): string; now?
     create(botId: string, input: BotEventRoutineCreateInput, validate?: (routines: readonly BotEventRoutine[]) => void, guard?:BotEventPublicationGuard): Promise<{ routine: BotEventRoutine; token?: string }> {
       return serial(botId, async () => {
         const clean = cleanInput(input);
-        if (clean.trigger.kind === "watch" && clean.trigger.source.type === "connector" && (!input.connector || input.id !== clean.trigger.source.watchId)) throw new Error("A connector watch requires an approved host binding.");
+        const trigger: BotRoutineTrigger =
+          clean.trigger.kind === "watch" &&
+          clean.trigger.source.type === "url" &&
+          input.sourceProposalId !== undefined &&
+          clean.trigger.agentProposed === undefined
+            ? { ...clean.trigger, agentProposed: true }
+            : clean.trigger;
+        if (trigger.kind === "watch" && trigger.source.type === "connector" && (!input.connector || input.id !== trigger.source.watchId)) throw new Error("A connector watch requires an approved host binding.");
         const routines = (await load(botId)).filter((routine) => routine.connector?.deletedAt === undefined || routine.connector.deletedAt >= now() - 86_400_000);
         if (routines.filter((routine) => routine.connector?.deletedAt !== undefined).length >= 128) throw new Error("Too many recent deleted connector watches. Try again tomorrow.");
         const identified = input.id ? routines.find((routine) => routine.id === input.id) : undefined;
@@ -383,12 +398,13 @@ export function createBotEventRoutineStore(options: { profileDir(): string; now?
         if (existing) return { routine: existing };
         if (routines.filter((routine) => routine.connector?.deletedAt === undefined).length >= BOT_EVENT_ROUTINES_MAX) throw new Error("This Bot has as many event routines as it can keep.");
         const at = now();
-        const minted = clean.trigger.kind === "webhook" ? mintBotWebhookToken() : undefined;
+        const minted = trigger.kind === "webhook" ? mintBotWebhookToken() : undefined;
         const routine: BotEventRoutine = {
           id: input.id ?? randomUUID(),
           ...(input.connector ? { connector: input.connector } : {}),
           botId,
           ...clean,
+          trigger,
           enabled: input.enabled ?? true,
           createdAt: at,
           updatedAt: at,
@@ -396,7 +412,7 @@ export function createBotEventRoutineStore(options: { profileDir(): string; now?
           ...(input.sourceProposalId !== undefined ? { sourceProposalId: input.sourceProposalId } : {}),
           seenEventIds: [],
           // The first check takes the baseline soon after the person adds it.
-          ...(clean.trigger.kind === "watch" ? { watch: freshWatch(at) } : {}),
+          ...(trigger.kind === "watch" ? { watch: freshWatch(at) } : {}),
         };
         const next = [...routines, routine];
         guard?.assertCurrent();validate?.(next);
@@ -423,21 +439,32 @@ export function createBotEventRoutineStore(options: { profileDir(): string; now?
           trigger: input.trigger ?? current.trigger,
         });
         if (clean.trigger.kind !== current.trigger.kind) throw new Error("Make a new routine to change what starts it.");
+        let trigger = clean.trigger;
+        if (trigger.kind === "watch" && current.trigger.kind === "watch") {
+          const sourceChanged = JSON.stringify(trigger.source) !== JSON.stringify(current.trigger.source);
+          if (trigger.source.type === "url") {
+            const agentProposed = sourceChanged
+              ? (current.sourceProposalId !== undefined || current.trigger.agentProposed !== undefined ? false : undefined)
+              : current.trigger.agentProposed;
+            const { agentProposed: _ignored, ...rest } = trigger;
+            trigger = agentProposed !== undefined ? { ...rest, agentProposed } : rest;
+          }
+        }
         const at = now();
         const revision = Math.max(at, current.updatedAt + 1);
         const enabled = input.enabled ?? current.enabled;
-        const next: BotEventRoutine = { ...current, ...clean, enabled, updatedAt: revision };
-        if (clean.trigger.kind === "file_change" && JSON.stringify(clean.trigger) !== JSON.stringify(current.trigger)) {
+        const next: BotEventRoutine = { ...current, ...clean, trigger, enabled, updatedAt: revision };
+        if (trigger.kind === "file_change" && JSON.stringify(trigger) !== JSON.stringify(current.trigger)) {
           delete next.held;
           delete next.running;
         }
-        if (clean.trigger.kind === "watch" && current.trigger.kind === "watch") {
-          next.watch = nextWatchState(current.watch ?? { failures: 0 }, current.trigger, clean.trigger, !current.enabled && enabled, at);
+        if (trigger.kind === "watch" && current.trigger.kind === "watch") {
+          next.watch = nextWatchState(current.watch ?? { failures: 0 }, current.trigger, trigger, !current.enabled && enabled, at);
           if (next.watch.pending) {
             if (clean.prompt !== current.prompt) delete next.watch.pending;
             else next.watch = { ...next.watch, pending: { ...next.watch.pending, revision } };
           }
-          if (clean.prompt === current.prompt && JSON.stringify(clean.trigger.source) === JSON.stringify(current.trigger.source)) {
+          if (clean.prompt === current.prompt && JSON.stringify(trigger.source) === JSON.stringify(current.trigger.source)) {
             if (next.held?.watchRevision === current.updatedAt) next.held = { ...next.held, watchRevision: revision };
             if (next.running) next.running = next.running.map((event) => event.watchRevision === current.updatedAt ? { ...event, watchRevision: revision } : event);
           } else {
