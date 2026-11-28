@@ -290,57 +290,139 @@ export async function ensurePrivateDirectoryAsync(
 /** Async counterpart of `hardenPrivateFile`. */
 export async function hardenPrivateFileAsync(
   target: string,
-  ownedPublicationPaths: readonly string[] = [],
+  ownedPublicationPaths: Iterable<string> = [],
 ): Promise<void> {
   const resolvedTarget = resolve(target);
-  const uniqueOwned = [...new Set(ownedPublicationPaths)].filter(
-    (other) => resolve(other) !== resolvedTarget,
-  );
-  const validLinks = async (info: Stats): Promise<boolean> => {
-    let expected = 1;
-    for (const other of uniqueOwned) {
-      try {
-        const alias = await lstat(other);
-        if (alias.isFile() && !alias.isSymbolicLink() && alias.dev === info.dev && alias.ino === info.ino) {
-          expected++;
-        }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  const currentOwnedOthers = (): string[] => {
+    const seen = new Set<string>();
+    for (const other of ownedPublicationPaths) {
+      const resolvedOther = resolve(other);
+      if (resolvedOther !== resolvedTarget) seen.add(resolvedOther);
+    }
+    return [...seen];
+  };
+  const lstatOrNull = async (candidate: string): Promise<Stats | null> => {
+    try {
+      return await lstat(candidate);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  };
+  const countMatchingOwnedAliases = async (
+    info: Stats,
+    others: readonly string[],
+  ): Promise<number> => {
+    let matches = 0;
+    for (const other of others) {
+      const alias = await lstatOrNull(other);
+      if (
+        alias !== null &&
+        alias.isFile() &&
+        !alias.isSymbolicLink() &&
+        alias.dev === info.dev &&
+        alias.ino === info.ino
+      ) {
+        matches += 1;
       }
     }
-    return expected <= 2 && info.nlink === expected;
+    return matches;
   };
-  let before: Stats;
-  try {
-    before = await lstat(target);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-    throw error;
-  }
-  if (!before.isFile() || before.isSymbolicLink() || !(await validLinks(before))) {
-    throw unsafe(target);
-  }
-  verifyOwner(before, target);
-  const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  try {
-    const opened = await handle.stat();
-    verifyOwner(opened, target);
-    if (
-      !opened.isFile() ||
-      !(await validLinks(opened)) ||
-      opened.dev !== before.dev ||
-      opened.ino !== before.ino
-    ) {
-      throw unsafe(target);
+  const checkLinks = async (
+    info: Stats,
+    restat: () => Promise<Stats | null>,
+  ): Promise<"valid" | "retry" | "unsafe"> => {
+    if (info.nlink === 1) return "valid";
+    if (info.nlink === 0) return "retry";
+    if (info.nlink === 2) {
+      const others = currentOwnedOthers();
+      if (others.length > 0 && (await countMatchingOwnedAliases(info, others)) === 1) {
+        return "valid";
+      }
     }
-    if (process.platform !== "win32" && (opened.mode & 0o7777) !== 0o600) {
-      await handle.chmod(0o600);
+    // An owned staging/held link may have been created or unlinked while we
+    // awaited lstat. Re-stat to separate a completed owned transition from an
+    // unapproved hard link.
+    const refreshed = await restat();
+    if (refreshed === null) return "retry";
+    if (refreshed.isSymbolicLink() || !refreshed.isFile()) return "unsafe";
+    verifyOwner(refreshed, target);
+    if (refreshed.dev !== info.dev || refreshed.ino !== info.ino) return "retry";
+    if (refreshed.nlink === 1) return "valid";
+    if (refreshed.nlink === 0) return "retry";
+    if (refreshed.nlink === 2) {
+      const latestOthers = currentOwnedOthers();
+      if (
+        latestOthers.length > 0 &&
+        (await countMatchingOwnedAliases(refreshed, latestOthers)) === 1
+      ) {
+        return "valid";
+      }
     }
-    const after = await lstat(target);
-    if (after.dev !== opened.dev || after.ino !== opened.ino || !(await validLinks(after))) {
-      throw unsafe(target);
+    return "unsafe";
+  };
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const before = await lstatOrNull(target);
+    if (before === null) return;
+    if (!before.isFile() || before.isSymbolicLink()) throw unsafe(target);
+    verifyOwner(before, target);
+    const beforeLinks = await checkLinks(before, () => lstatOrNull(target));
+    if (beforeLinks === "unsafe") throw unsafe(target);
+    if (beforeLinks === "retry") continue;
+
+    let handle: Awaited<ReturnType<typeof open>>;
+    try {
+      handle = await open(
+        target,
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      );
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") return;
+      if (code === "ELOOP" || code === "EMLINK") throw unsafe(target);
+      throw error;
     }
-  } finally {
-    await handle.close();
+
+    let retry = false;
+    try {
+      const opened = await handle.stat();
+      verifyOwner(opened, target);
+      if (!opened.isFile()) throw unsafe(target);
+      if (opened.dev !== before.dev || opened.ino !== before.ino) {
+        retry = true;
+      } else {
+        const openedLinks = await checkLinks(opened, async () => handle.stat());
+        if (openedLinks === "unsafe") throw unsafe(target);
+        if (process.platform !== "win32" && (opened.mode & 0o7777) !== 0o600) {
+          await handle.chmod(0o600);
+        }
+        if (openedLinks === "retry") {
+          const current = await lstatOrNull(target);
+          if (current === null) return;
+          retry = true;
+        } else {
+          const after = await lstatOrNull(target);
+          if (after === null) return;
+          if (after.isSymbolicLink() || !after.isFile()) throw unsafe(target);
+          verifyOwner(after, target);
+          if (after.dev !== opened.dev || after.ino !== opened.ino) {
+            retry = true;
+          } else {
+            const afterLinks = await checkLinks(after, () => lstatOrNull(target));
+            if (afterLinks === "unsafe") throw unsafe(target);
+            if (afterLinks === "retry") {
+              retry = true;
+            } else {
+              return;
+            }
+          }
+        }
+      }
+    } finally {
+      await handle.close();
+    }
+    if (!retry) return;
   }
+  throw unsafe(target);
 }

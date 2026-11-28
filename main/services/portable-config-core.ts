@@ -1375,6 +1375,7 @@ export function createPortableConfigStores(
     path: string;
     dev: bigint;
     ino: bigint;
+    size: bigint;
     mtimeNs: bigint;
     ctimeNs: bigint;
   }
@@ -1517,6 +1518,7 @@ export function createPortableConfigStores(
         !isPrivateDirStat(dirStat, uid) ||
         dirStat.dev !== sig.dir.dev ||
         dirStat.ino !== sig.dir.ino ||
+        dirStat.size !== sig.dir.size ||
         dirStat.mtimeNs !== sig.dir.mtimeNs ||
         dirStat.ctimeNs !== sig.dir.ctimeNs
       ) {
@@ -1529,6 +1531,7 @@ export function createPortableConfigStores(
         !isPrivateSingleLinkFileStat(configStat, uid) ||
         configStat.dev !== sig.configFile.dev ||
         configStat.ino !== sig.configFile.ino ||
+        configStat.size !== sig.configFile.size ||
         configStat.mtimeNs !== sig.configFile.mtimeNs ||
         configStat.ctimeNs !== sig.configFile.ctimeNs
       ) {
@@ -1541,6 +1544,7 @@ export function createPortableConfigStores(
           !isPrivateSingleLinkFileStat(actual, uid) ||
           actual.dev !== expected.dev ||
           actual.ino !== expected.ino ||
+          actual.size !== expected.size ||
           actual.mtimeNs !== expected.mtimeNs ||
           actual.ctimeNs !== expected.ctimeNs
         ) {
@@ -1553,19 +1557,68 @@ export function createPortableConfigStores(
     }
   }
 
+  function classifyManagedSecondaryEntry(
+    entry: string,
+    portableDirectory: boolean,
+    configFilePath: string,
+  ): { managed: boolean; isArchive: boolean } {
+    const archive = `${LOCAL_CONFIG_FILENAME}${LEGACY_CONFIG_ARCHIVE_SUFFIX}`;
+    const isArchive =
+      !portableDirectory &&
+      (entry === archive ||
+        /^config\.json\.pre-aiden-dir\.recovery-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(
+          entry,
+        ));
+    const isCorrupt =
+      /^config\.json\.invalid-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}$/u.test(
+        entry,
+      );
+    const isConflict =
+      /^config\.json\.conflict-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(
+        entry,
+      );
+    const isStaged =
+      /^\.config\.json(?:\.pre-aiden-dir(?:\.recovery-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})?)?\.[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.tmp$/u.test(
+        entry,
+      );
+    return {
+      isArchive,
+      managed:
+        isArchive ||
+        isCorrupt ||
+        isConflict ||
+        isStaged ||
+        isDataStoreRecoveryFile(entry, configFilePath),
+    };
+  }
+
+  function sameDirBaseline(left: BigIntStats, right: BigIntStats): boolean {
+    return (
+      left.dev === right.dev &&
+      left.ino === right.ino &&
+      left.size === right.size &&
+      left.mtimeNs === right.mtimeNs &&
+      left.ctimeNs === right.ctimeNs
+    );
+  }
+
   async function captureProtectSignature(
     root: string,
+    portableDirectory: boolean,
     resolution: PrivateDirectoryResolution,
+    dirBeforeScan: BigIntStats,
     secondaryPaths: readonly string[],
     uid: bigint,
   ): Promise<ProtectSignature | undefined> {
+    if (!isPrivateDirStat(dirBeforeScan, uid)) return undefined;
     const configPath = path.join(root, PORTABLE_CONFIG_FILENAME);
     try {
       const [
         ancestorStats,
         symlinkStats,
         traversedStats,
-        dirStat,
+        dirBeforeVerify,
+        verifyEntries,
         configStat,
         secondaryStats,
       ] = await Promise.all([
@@ -1577,10 +1630,38 @@ export function createPortableConfigStores(
           resolution.traversedDirectories.map((entry) => fs.lstat(entry, { bigint: true })),
         ),
         fs.lstat(resolution.canonical, { bigint: true }),
+        fs.readdir(resolution.canonical),
         lstatMaybeMissing(configPath),
         Promise.all(secondaryPaths.map((entry) => fs.lstat(entry, { bigint: true }))),
       ]);
-      if (!isPrivateDirStat(dirStat, uid)) return undefined;
+      const dirStat = await fs.lstat(resolution.canonical, { bigint: true });
+      if (
+        !isPrivateDirStat(dirBeforeVerify, uid) ||
+        !isPrivateDirStat(dirStat, uid) ||
+        !sameDirBaseline(dirBeforeScan, dirBeforeVerify) ||
+        !sameDirBaseline(dirBeforeScan, dirStat)
+      ) {
+        return undefined;
+      }
+      const scannedSecondarySet = new Set(secondaryPaths);
+      let verifiedManagedCount = 0;
+      for (const entry of verifyEntries) {
+        const { managed, isArchive } = classifyManagedSecondaryEntry(
+          entry,
+          portableDirectory,
+          configPath,
+        );
+        if (!managed) continue;
+        const candidatePath = path.join(root, entry);
+        if (isArchive) {
+          const archiveStat = await lstatMaybeMissing(candidatePath);
+          if (!archiveStat || archiveStat.isDirectory()) continue;
+        }
+        if (!scannedSecondarySet.has(candidatePath)) return undefined;
+        verifiedManagedCount += 1;
+      }
+      if (verifiedManagedCount !== scannedSecondarySet.size) return undefined;
+
       const ancestors: ProtectAncestorSignature[] = [];
       for (let i = 0; i < resolution.ancestors.length; i += 1) {
         const entryPath = resolution.ancestors[i]!;
@@ -1630,6 +1711,7 @@ export function createPortableConfigStores(
           path: configPath,
           dev: configStat.dev,
           ino: configStat.ino,
+          size: configStat.size,
           mtimeNs: configStat.mtimeNs,
           ctimeNs: configStat.ctimeNs,
         };
@@ -1643,6 +1725,7 @@ export function createPortableConfigStores(
           path: entryPath,
           dev: st.dev,
           ino: st.ino,
+          size: st.size,
           mtimeNs: st.mtimeNs,
           ctimeNs: st.ctimeNs,
         });
@@ -1659,6 +1742,7 @@ export function createPortableConfigStores(
           path: resolution.canonical,
           dev: dirStat.dev,
           ino: dirStat.ino,
+          size: dirStat.size,
           mtimeNs: dirStat.mtimeNs,
           ctimeNs: dirStat.ctimeNs,
         },
@@ -1673,28 +1757,39 @@ export function createPortableConfigStores(
   async function protectConfigDirectory(
     root: string,
     portableDirectory: boolean,
-    ownedPublicationPaths: readonly string[] = [],
-  ): Promise<{ resolution: PrivateDirectoryResolution; secondaryPaths: string[] }> {
-    const ownedPaths = [...ownedPublicationPaths, ...archivePublicationPaths];
+    ownedPublicationPaths: Iterable<string> = [],
+  ): Promise<{
+    resolution: PrivateDirectoryResolution;
+    dirBeforeScan: BigIntStats;
+    secondaryPaths: string[];
+  }> {
+    const liveOwnedPaths: Iterable<string> = {
+      *[Symbol.iterator]() {
+        yield* ownedPublicationPaths;
+        yield* archivePublicationPaths;
+      },
+    };
     const resolution = await ensurePrivateDirectoryAsync(root);
     const file = path.join(root, PORTABLE_CONFIG_FILENAME);
-    await hardenPrivateFileAsync(file, ownedPaths);
+    await hardenPrivateFileAsync(file, liveOwnedPaths);
+    const dirBeforeScan = await fs.lstat(resolution.canonical, { bigint: true });
     const protectedSecondary: string[] = [];
     for (const entry of await fs.readdir(root)) {
-      const archive = `${LOCAL_CONFIG_FILENAME}${LEGACY_CONFIG_ARCHIVE_SUFFIX}`;
-      const isArchive = !portableDirectory && (entry === archive ||
-        /^config\.json\.pre-aiden-dir\.recovery-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(entry));
-      const isCorrupt = /^config\.json\.invalid-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}$/u.test(entry);
-      const isConflict = /^config\.json\.conflict-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(entry);
-      if (isArchive && (await fs.lstat(path.join(root, entry))).isDirectory()) continue;
-      const isStaged = /^\.config\.json(?:\.pre-aiden-dir(?:\.recovery-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})?)?\.[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.tmp$/u.test(entry);
-      if (isArchive || isCorrupt || isConflict || isStaged || isDataStoreRecoveryFile(entry, file)) {
-        const secondaryPath = path.join(root, entry);
-        await hardenPrivateFileAsync(secondaryPath, ownedPaths);
-        protectedSecondary.push(secondaryPath);
+      const { managed, isArchive } = classifyManagedSecondaryEntry(
+        entry,
+        portableDirectory,
+        file,
+      );
+      if (!managed) continue;
+      const secondaryPath = path.join(root, entry);
+      if (isArchive) {
+        const archiveStat = await lstatMaybeMissing(secondaryPath);
+        if (!archiveStat || archiveStat.isDirectory()) continue;
       }
+      await hardenPrivateFileAsync(secondaryPath, liveOwnedPaths);
+      protectedSecondary.push(secondaryPath);
     }
-    return { resolution, secondaryPaths: protectedSecondary };
+    return { resolution, dirBeforeScan, secondaryPaths: protectedSecondary };
   }
 
   function createCachedProtector(
@@ -1703,40 +1798,58 @@ export function createPortableConfigStores(
   ): (ownedPaths?: readonly string[]) => Promise<void> {
     let cachedSignature: ProtectSignature | undefined;
     let invalidationEpoch = 0;
-    return async (ownedPaths: readonly string[] = []): Promise<void> => {
+    let storeOwnedPathsRef: readonly string[] | undefined;
+    return async (ownedPaths?: readonly string[]): Promise<void> => {
+      if (ownedPaths !== undefined) {
+        storeOwnedPathsRef = ownedPaths;
+      }
+      const activeOwnedGetter = (): readonly string[] =>
+        ownedPaths !== undefined ? ownedPaths : (storeOwnedPathsRef ?? []);
+      const liveStoreOwned: Iterable<string> = {
+        *[Symbol.iterator]() {
+          yield* activeOwnedGetter();
+        },
+      };
+      const hasActivePublications = (): boolean =>
+        activeOwnedGetter().length > 0 || archivePublicationPaths.size > 0;
+
       const root = await resolveRoot();
       const uid = typeof process.getuid === "function" ? BigInt(process.getuid()) : undefined;
       const canUseCache =
-        process.platform !== "win32" &&
-        uid !== undefined &&
-        ownedPaths.length === 0 &&
-        archivePublicationPaths.size === 0;
+        process.platform !== "win32" && uid !== undefined && !hasActivePublications();
       if (!canUseCache) {
         cachedSignature = undefined;
         invalidationEpoch += 1;
-        await protectConfigDirectory(root, portableDirectory, ownedPaths);
+        await protectConfigDirectory(root, portableDirectory, liveStoreOwned);
         return;
       }
-      if (cachedSignature && (await verifyProtectSignature(cachedSignature, root, uid))) {
+      if (
+        cachedSignature &&
+        !hasActivePublications() &&
+        (await verifyProtectSignature(cachedSignature, root, uid))
+      ) {
         return;
       }
       cachedSignature = undefined;
       const epochAtStart = invalidationEpoch;
-      const { resolution, secondaryPaths } = await protectConfigDirectory(
+      const { resolution, dirBeforeScan, secondaryPaths } = await protectConfigDirectory(
         root,
         portableDirectory,
-        ownedPaths,
+        liveStoreOwned,
       );
-      if (
-        epochAtStart === invalidationEpoch &&
-        ownedPaths.length === 0 &&
-        archivePublicationPaths.size === 0
-      ) {
+      if (epochAtStart === invalidationEpoch && !hasActivePublications()) {
         const freshUid =
           typeof process.getuid === "function" ? BigInt(process.getuid()) : undefined;
         if (freshUid === uid) {
-          const captured = await captureProtectSignature(root, resolution, secondaryPaths, uid);
-          if (epochAtStart === invalidationEpoch && archivePublicationPaths.size === 0) {
+          const captured = await captureProtectSignature(
+            root,
+            portableDirectory,
+            resolution,
+            dirBeforeScan,
+            secondaryPaths,
+            uid,
+          );
+          if (epochAtStart === invalidationEpoch && !hasActivePublications()) {
             cachedSignature = captured;
           }
         }

@@ -1916,14 +1916,16 @@ test("cached signatures invalidate immediately on permission changes, symlink re
   // 1. Loosening file or directory permissions invalidates on the very next read and re-hardens.
   await fs.chmod(fileA, 0o644);
   await bundle.portable.load();
-  assert.equal(readdirCalls, 1);
+  const afterFileReharden = readdirCalls;
+  assert.ok(afterFileReharden > 0, "cold re-hardening scanned directory");
   assert.equal((await fs.stat(fileA)).mode & 0o7777, 0o600);
   await bundle.portable.load();
-  assert.equal(readdirCalls, 1, "re-cached after re-hardening");
+  assert.equal(readdirCalls, afterFileReharden, "re-cached after re-hardening");
 
   await fs.chmod(dotfilesA, 0o755);
   await bundle.portable.load();
-  assert.equal(readdirCalls, 2);
+  const afterDirReharden = readdirCalls;
+  assert.ok(afterDirReharden > afterFileReharden, "loosened directory invalidated cached signature");
   assert.equal((await fs.stat(dotfilesA)).mode & 0o7777, 0o700);
 
   // 2. Loosening a non-sticky ancestor invalidates and fails closed before returning cache.
@@ -1937,7 +1939,7 @@ test("cached signatures invalidate immediately on permission changes, symlink re
   await fs.symlink(dotfilesB, r.portableRoot);
   const countBeforeRetarget = readdirCalls;
   await bundle.portable.load();
-  assert.equal(readdirCalls, countBeforeRetarget + 1, "retargeted symlink missed cached signature");
+  assert.ok(readdirCalls > countBeforeRetarget, "retargeted symlink missed cached signature");
   assert.equal((await fs.stat(dotfilesB)).mode & 0o7777, 0o700, "new symlink target was hardened");
 
   const unsafeParent = path.join(base, "world-writable");
@@ -2052,4 +2054,155 @@ test("signature cache is bypassed whenever ownedPublicationPaths or archivePubli
     draft.workspaces = [{ ...workspace, name: "Updated" }];
   });
   assert.equal(checkedOwnedPublication, true);
+});
+
+test("a permissive secondary file created right after readdir during cold hardening cannot remain unhardened behind a cached signature", { skip: process.platform === "win32" }, async (t) => {
+  const r = await roots(t);
+  await fs.chmod(path.dirname(r.portableRoot), 0o755);
+  await fs.chmod(r.localRoot, 0o755);
+
+  const bundle = stores(r);
+  await bundle.ensureMigrated();
+  await bundle.portable.save({
+    providers: [],
+    providerIdAliases: {},
+    mcpServers: [],
+    skills: [],
+  });
+
+  // Invalidate the warm directory signature so the next load runs protectConfigDirectory.
+  const trigger = path.join(r.portableRoot, "invalidate-trigger");
+  await fs.writeFile(trigger, "x", "utf8");
+  await fs.rm(trigger);
+
+  const lateCorruptPath = path.join(
+    r.portableRoot,
+    "config.json.invalid-2026-11-28T05-00-00-000Z-deadbeef",
+  );
+  const originalReaddir = fsPromises.readdir;
+  let injectedDuringScan = false;
+  let readdirCalls = 0;
+  const readdirMock = t.mock.method(
+    fsPromises,
+    "readdir",
+    async (...args: Parameters<typeof originalReaddir>) => {
+      readdirCalls += 1;
+      const entries = await Reflect.apply(originalReaddir, fsPromises, args);
+      if (!injectedDuringScan && String(args[0]) === r.portableRoot) {
+        injectedDuringScan = true;
+        await fs.writeFile(lateCorruptPath, "corrupt", { mode: 0o644 });
+        await fs.chmod(lateCorruptPath, 0o644);
+      }
+      return entries;
+    },
+  );
+  syncBuiltinESMExports();
+  t.after(() => {
+    readdirMock.mock.restore();
+    syncBuiltinESMExports();
+  });
+
+  // First load misses the late secondary file in its initial scan, so signature capture must decline to publish.
+  await bundle.portable.load();
+  assert.equal(injectedDuringScan, true);
+
+  // Next access must perform an uncached follow-up scan and harden the permissive secondary file to 0o600.
+  await bundle.portable.load();
+  assert.equal((await fs.lstat(lateCorruptPath)).mode & 0o7777, 0o600);
+
+  // Once the inventory is complete and private, warm reads hit the cached signature without readdir,
+  // and loosening the secondary file invalidates on the very next read.
+  const settledCalls = readdirCalls;
+  await bundle.portable.load();
+  assert.equal(readdirCalls, settledCalls, "complete secondary inventory cached cleanly");
+
+  await fs.chmod(lateCorruptPath, 0o644);
+  await bundle.portable.load();
+  assert.equal((await fs.lstat(lateCorruptPath)).mode & 0o7777, 0o600);
+});
+
+test("concurrent configStore reads and atomic publications never spuriously fail while still rejecting unapproved hard links", { skip: process.platform === "win32" }, async (t) => {
+  const emptySecrets: SecretsPort = {
+    async hasKey() {
+      return false;
+    },
+    async deleteKey() {},
+    async deleteProviderKeyWithQuarantine() {},
+    async migrateKeys() {},
+    async migrateProviderKeysWithBindings() {
+      return true;
+    },
+  };
+
+  const r = await roots(t);
+  await fs.chmod(path.dirname(r.portableRoot), 0o755);
+  await fs.chmod(r.localRoot, 0o755);
+
+  const bundle = stores(r);
+  const configStore = createConfigStore(bundle, emptySecrets);
+  await configStore.saveWorkspace(workspace);
+  await bundle.portable.update((draft) => {
+    draft.providerIdAliases = { initial: "target" };
+  });
+
+  let running = true;
+  const writer = (async () => {
+    for (let i = 0; i < 40; i += 1) {
+      await Promise.all([
+        configStore.saveWorkspace({ ...workspace, name: `Workspace ${i}` }),
+        bundle.portable.update((draft) => {
+          draft.providerIdAliases = { [`old-${i}`]: `new-${i}` };
+        }),
+        bundle.ensureReadme(),
+      ]);
+    }
+    running = false;
+  })();
+
+  const readers = Array.from({ length: 6 }, () =>
+    (async () => {
+      while (running) {
+        const [ws, servers, settings, providers] = await Promise.all([
+          configStore.getWorkspace(workspace.id),
+          configStore.listMcpServers(),
+          configStore.getSettings(),
+          configStore.listProviders(),
+        ]);
+        assert.equal(ws?.id, workspace.id);
+        assert.equal(servers.length, 0);
+        assert.ok(settings);
+        assert.ok(Array.isArray(providers));
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    })(),
+  );
+
+  await Promise.all([writer, ...readers]);
+  assert.equal((await fs.stat(r.portableRoot)).mode & 0o7777, 0o700);
+  assert.equal((await fs.stat(r.portableFile)).mode & 0o7777, 0o600);
+  assert.equal((await fs.stat(r.localRoot)).mode & 0o7777, 0o700);
+  assert.equal((await fs.stat(r.localFile)).mode & 0o7777, 0o600);
+
+  // Verify an unapproved third link created during an active publication still fails closed.
+  const unapproved = path.join(path.dirname(r.portableRoot), "unapproved-during-publish.json");
+  let verifiedUnapprovedRejection = false;
+  const hookedBundle = createPortableConfigStores(
+    () => r.portableRoot,
+    () => r.localRoot,
+    {
+      beforeLocalProtectedPublish: async () => {
+        await fs.link(r.portableFile, unapproved);
+        try {
+          await assert.rejects(hookedBundle.portable.load(), /storage must be a private/u);
+          verifiedUnapprovedRejection = true;
+        } finally {
+          await fs.unlink(unapproved);
+        }
+      },
+    },
+  );
+  await hookedBundle.local.update((draft) => {
+    draft.workspaces = [{ ...workspace, name: "Final" }];
+  });
+  assert.equal(verifiedUnapprovedRejection, true);
 });
