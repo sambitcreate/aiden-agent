@@ -4990,3 +4990,159 @@ test("the person takes back a queued message before its turn: it never runs, and
     await runtime.shutdown();
   }
 });
+
+test("streaming 100 pi.live frames with unchanged entries skips transcript re-projection and caches sharedImage lookups until reset", async () => {
+  let historicalReads = 0;
+  const trackedUser: RawEntry = { id: 1, kind: "pi.user" };
+  const userModel = [{ role: "user", content: [{ type: "text", text: "Show the chart" }], timestamp: 1_700_000_000_000 }];
+  Object.defineProperty(trackedUser, "model", {
+    enumerable: true,
+    get() {
+      historicalReads += 1;
+      return userModel;
+    },
+  });
+  let imageReads = 0;
+  const imagePayload = {
+    id: "img-2",
+    name: "chart.png",
+    mimeType: "image/png",
+    size: Buffer.from(PNG_BASE64, "base64").length,
+    data: PNG_BASE64,
+  };
+  const trackedImage: RawEntry = { id: 2, kind: "aiden.bot-shared-image" };
+  Object.defineProperty(trackedImage, "data", {
+    enumerable: true,
+    get() {
+      imageReads += 1;
+      return imagePayload;
+    },
+  });
+  const history: RawEntry[] = [
+    trackedUser,
+    trackedImage,
+    assistant(3, "Halfway through"),
+    notice(4, { notice: "interrupted", requestId: "req-interrupted" }),
+    user(5, "Keep going"),
+  ];
+  const driven = drivenConversation(history);
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_live" });
+  const service = new AidenRemoteBotSessionService({
+    bots: activityBots(),
+    runtime: async () => ({ ...fake.runtime, conversation: async () => driven.conversation as never }),
+    turnIntents: createBotTurnIntents(),
+  });
+  const stream = await openAudienceStream(service, { activity: true, images: true });
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the initial snapshot");
+    const initialEntries = stream.frames[0]!.payload.session.entries as Array<Record<string, unknown>>;
+    const interrupted = initialEntries.find((entry) => entry.id === "entry_3");
+    assert.equal(interrupted?.interrupted, true, "backward notice scan marks the preceding assistant message interrupted");
+    assert.ok(historicalReads >= 1, "initial attach projects the transcript once");
+
+    // Prime and verify sharedImage cache across repeated reads while view.entries is unchanged.
+    const firstImage = await service.sharedImage(BOT_ID, "entry_2");
+    assert.deepEqual(firstImage.bytes, Buffer.from(PNG_BASE64, "base64"));
+    historicalReads = 0;
+    imageReads = 0;
+
+    for (let index = 1; index <= 100; index += 1) {
+      await driven.emitView(history, {
+        "pi.live": {
+          run: { taskId: 1, inputs: [5] },
+          generation: { attempt: 1, message: { content: [{ type: "text", text: `Token ${index}` }] } },
+        },
+      });
+    }
+    await stream.until(
+      () => stream.frames.some((frame) => frame.type === "partial" && frame.payload.text === "Token 100"),
+      "the 100th partial frame",
+    );
+
+    const secondImage = await service.sharedImage(BOT_ID, "entry_2");
+    const thirdImage = await service.sharedImage(BOT_ID, "entry_2");
+    assert.deepEqual(secondImage.bytes, firstImage.bytes);
+    assert.deepEqual(thirdImage.bytes, firstImage.bytes);
+    assert.equal(historicalReads, 0, "100 pi.live frames call projectBotTranscript zero times when view.entries is unchanged");
+    assert.equal(imageReads, 0, "sharedImage reuses cached lookup and validated bytes while view.entries is unchanged");
+
+    // Verify gapless (epoch, seq) across every emitted frame.
+    const seqs = stream.frames.map((frame) => frame.seq);
+    assert.deepEqual(seqs, seqs.map((_, idx) => seqs[0]! + idx));
+
+    // A head-marker reset replaces view.entries and invalidates both projection and sharedImage caches.
+    fake.setState({ kind: "idle" });
+    const afterReset: RawEntry[] = [
+      { id: 10, kind: "pi.reset", head: 11 } as unknown as RawEntry,
+      user(11, "Fresh turn"),
+    ];
+    await driven.emitView(afterReset, {});
+    await stream.until(
+      () => stream.frames.filter((frame) => frame.type === "snapshot").length >= 2,
+      "the post-reset snapshot",
+    );
+    const latestSnapshot = [...stream.frames].reverse().find((frame) => frame.type === "snapshot")!;
+    assert.deepEqual(
+      latestSnapshot.payload.session.entries.map((entry: { text?: string }) => entry.text),
+      ["Fresh turn"],
+    );
+    await assert.rejects(service.sharedImage(BOT_ID, "entry_2"), { code: "not_found" });
+  } finally {
+    await stream.close();
+    await service.close();
+  }
+});
+
+test("refreshConnectCards invalidates cached projections after pi.live streaming and broadcasts a snapshot when card status changes", async () => {
+  const history: RawEntry[] = [user(1, "Connect Gmail"), card(2, "gmail"), user(3, "Wait for setup")];
+  const driven = drivenConversation(history);
+  const connected = new Set<string>();
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_card" });
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => ({ ...fake.runtime, conversation: async () => driven.conversation as never }),
+    connectCardStatus: async (_botId, entry) => (connected.has(entry.pluginId) ? "connected" : entry.status),
+  });
+  const stream = await openStream(service);
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the initial snapshot");
+    await driven.emit(history, "Checking…");
+    await stream.until(() => stream.frames.some((frame) => frame.type === "partial"), "streamed partial");
+
+    connected.add("gmail");
+    await service.refreshConnectCards();
+    await stream.until(
+      () =>
+        stream.frames.filter((frame) => frame.type === "snapshot").length >= 2 &&
+        stream.frames.some(
+          (frame) =>
+            frame.type === "snapshot" &&
+            frame.payload.session.entries.some((entry: any) => entry.type === "connect_card" && entry.status === "connected"),
+        ),
+      "the connected card snapshot",
+    );
+
+    // If the connection is later disconnected before a new entry commits, a subsequent pi.live frame
+    // still re-resolves the durable pending card back to pending.
+    connected.delete("gmail");
+    await driven.emit(history, "Checking again…");
+    await stream.until(
+      () =>
+        stream.frames.some(
+          (frame) =>
+            frame.type === "entry" &&
+            (frame.payload as any)?.entry?.type === "connect_card" &&
+            (frame.payload as any)?.entry?.status === "pending",
+        ) &&
+        stream.frames.some(
+          (frame) => frame.type === "partial" && (frame.payload as any)?.text === "Checking again…",
+        ),
+      "the reverted pending card update",
+    );
+    const seqs = stream.frames.map((frame) => frame.seq);
+    assert.deepEqual(seqs, seqs.map((_, idx) => seqs[0]! + idx));
+  } finally {
+    await stream.close();
+    await service.close();
+  }
+});

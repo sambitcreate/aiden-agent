@@ -133,7 +133,7 @@ import { createBotMemoryReview, type BotMemoryAdmission } from "../bot-memory/re
 import { BOT_MEMORY_TOOL_NAME, botMemoryToolEntry, withBotMemoryIngress } from "../bot-memory/tool.js";
 import { BOT_RECALL_TOOL_NAME, botRecallToolEntry } from "../bot-memory/recall.js";
 
-import { createBotLiveProjection, type BotLiveProjection } from "./live-projection.js";
+import { createBotLiveProjection, projectNewestBotTurnEntries, type BotLiveProjection } from "./live-projection.js";
 import { botIngressAllowsTool, botIngressRefusal, botTurnAttended } from "./bot-tool-policy.js";
 import { botSubagentReplyClocks } from "./bot-subagent-reply-clocks.js";
 
@@ -1055,17 +1055,14 @@ function watchRun(botId: string, state: BotSessionState): void {
     })
     .catch(() => undefined);
   void botLiveProjection()
-    .subscribe(botId, {
-      send: (event) => {
-        run.at = Date.now();
-        if (event.type === "queued") run.queued = event.queued.length;
-        if (event.type === "snapshot") run.queued = event.snapshot.queued.length;
-      },
+    .observeRun(botId, ({ queued }) => {
+      run.at = Date.now();
+      run.queued = queued;
     })
-    .then((subscription) => {
-      run.queued = subscription.snapshot.queued.length;
-      if (watchedRuns.get(botId) === run) run.unsubscribe = () => subscription.unsubscribe();
-      else subscription.unsubscribe();
+    .then((observation) => {
+      run.queued = observation.queued;
+      if (watchedRuns.get(botId) === run) run.unsubscribe = () => observation.unsubscribe();
+      else observation.unsubscribe();
     })
     .catch((error: unknown) => logger.warn("bots", `Bot ${botId} run watch did not start.`, error));
 }
@@ -1107,18 +1104,15 @@ const runWatchdog = createBotRunWatchdog({
 });
 
 /**
- * The claim check on a Bot's newest turn, read from its projected transcript.
- * Connector tools are told by the Bot's real MCP tool names.
+ * The claim check on a Bot's newest turn, read from its bounded descending
+ * turn slice. Connector tools are told by the Bot's real MCP tool names.
  */
 export async function botTurnClaims(botId: string): Promise<{ stepIds: string[]; toolNames: string[] } | undefined> {
-  const subscription = await botLiveProjection().subscribe(botId, { send: () => undefined });
-  try {
-    const connectors = toolSources.mcpToolNames(botId);
-    const result = checkBotTurnClaims(subscription.snapshot.entries, { isConnectorTool: (name) => connectors.has(name) });
-    return result ? { stepIds: result.claimCheck.stepIds, toolNames: result.toolNames } : undefined;
-  } finally {
-    subscription.unsubscribe();
-  }
+  const conversation = await (await botSessionRuntime()).conversation(botId);
+  const entries = await projectNewestBotTurnEntries(conversation);
+  const connectors = toolSources.mcpToolNames(botId);
+  const result = checkBotTurnClaims(entries, { isConnectorTool: (name) => connectors.has(name) });
+  return result ? { stepIds: result.claimCheck.stepIds, toolNames: result.toolNames } : undefined;
 }
 
 /** Keep waiting on a stuck-run card: another full window before asking again. */

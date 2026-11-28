@@ -188,7 +188,7 @@ import {
 import { isComputerUseCapabilityTool } from "./bot-tool-authority.js";
 import { AidenOperationNotExecutedError, AidenOperationReplaySafeRetryError } from "./aiden-remote-operation-contract.js";
 import { BotSessionError, type BotSessionErrorReason, type BotSessionState } from "./bot-runtime/bot-session-service.js";
-import type { BotLiveActivity } from "../../renderer/shared/bot-live.js";
+import type { BotLiveActivity, BotTranscriptEntry } from "../../renderer/shared/bot-live.js";
 import { stopWithIntents, type BotTurnIntent, type BotTurnIntents } from "./bot-runtime/bot-turn-intents.js";
 import { watchActiveConversation, type ActiveConversationView } from "./bot-runtime/active-transcript-watch.js";
 import {
@@ -197,9 +197,11 @@ import {
   liveQueuedMessages,
   liveRunKey,
   createBotRunStarts,
+  createBotTranscriptCheckpoint,
   createQueuedInputClassifier,
   projectBotTranscript,
   type BotRunStarts,
+  type BotTranscriptCheckpoint,
   type QueuedInputClassifier,
 } from "./bot-runtime/live-projection.js";
 import {
@@ -533,170 +535,238 @@ function handoffResultEntryId(rowId: string): string {
  * messages was sent as, by entry id. Only a `user` message takes one: a
  * routine's input and a question answer never do, whatever the map says.
  */
+type SharedImageTranscriptEntry = Extract<BotTranscriptEntry, { type: "shared_image" }>;
+type CachedWireEntry = { submissionId: string | undefined; wire: AidenRemoteBotSessionEntry | null };
+
+function projectSingleSessionEntry(
+  entry: BotTranscriptEntry,
+  submissions: ReadonlyMap<string, string>,
+  cache?: WeakMap<BotTranscriptEntry, CachedWireEntry>,
+): AidenRemoteBotSessionEntry | null {
+  const submissionId = entry.type === "user" ? submissions.get(entry.id) : undefined;
+  const cached = cache?.get(entry);
+  if (cached && cached.submissionId === submissionId) return cached.wire;
+  const id = wireEntryId(entry.id);
+  let wire: AidenRemoteBotSessionEntry | null = null;
+  switch (entry.type) {
+    case "peer": {
+      const createdAt = isoOf(entry.at);
+      wire = {
+        type: "peer",
+        id,
+        exchangeId: entry.exchangeId,
+        direction: entry.direction,
+        peerBotId: entry.peerBotId,
+        peerName: wireText(entry.peerName, 160),
+        messageKind: entry.messageKind,
+        ...(createdAt ? { createdAt } : {}),
+        ...(entry.final === true ? { final: true as const } : {}),
+      };
+      break;
+    }
+    case "bot_message":
+    case "bot_message_status": {
+      const createdAt = isoOf(entry.at);
+      const label = entry.type === "bot_message" ? botMessageRowLabel(entry.kind, entry.botName) : entry.data.botName;
+      const text =
+        entry.type === "bot_message"
+          ? entry.text
+          : [
+              botMessageStatusLine(entry.data),
+              ...(entry.data.outcome === "replied_while_paused" && entry.data.text ? [entry.data.text] : []),
+            ].join("\n\n");
+      wire = {
+        type: "message",
+        id,
+        role: "user",
+        label: wireText(label, 120),
+        text: bounded(text),
+        ...(createdAt ? { createdAt } : {}),
+      };
+      break;
+    }
+    case "user":
+    case "routine": {
+      const createdAt = isoOf(entry.at);
+      const label = entry.type === "routine" ? wireText(entry.label, 120).trim() : "";
+      wire = {
+        type: "message",
+        id,
+        role: "user",
+        // A routine shows the person's prompt, not its notes block or the silence rule.
+        // Photos sent without words read as a caption: phones show no image there.
+        text: bounded(
+          entry.type === "routine"
+            ? botRoutinePromptOf(entry.text)
+            : entry.text.trim()
+              ? entry.text
+              : photoCaption(entry.imageCount),
+        ),
+        ...(createdAt ? { createdAt } : {}),
+        ...(label ? { label } : {}),
+        ...(submissionId !== undefined && WIRE_SUBMISSION_ID.test(submissionId) ? { submissionId } : {}),
+      };
+      break;
+    }
+    case "assistant": {
+      const text = entry.text.trim() ? entry.text : "";
+      // A tool-only step has no text to show; its activity stays on the Mac.
+      if (!text) break;
+      const createdAt = isoOf(entry.at);
+      wire = {
+        type: "message",
+        id,
+        role: "assistant",
+        text: bounded(text),
+        ...(createdAt ? { createdAt } : {}),
+        ...(entry.stopReason === "aborted" ? { interrupted: true as const } : {}),
+      };
+      break;
+    }
+    case "failed_turn": {
+      // The phone shows "I couldn't finish that reply." with Retry; the error stays on the Mac.
+      const createdAt = isoOf(entry.at);
+      const retryText = entry.retryText === null ? "" : bounded(entry.retryText);
+      wire = {
+        type: "failed_turn",
+        id,
+        ...(createdAt ? { createdAt } : {}),
+        ...(retryText.trim() ? { retryText } : {}),
+      };
+      break;
+    }
+    case "question_answer": {
+      // The person's choice on a quick-reply card reads as their message.
+      const createdAt = isoOf(entry.at);
+      wire = { type: "message", id, role: "user", text: bounded(entry.text), ...(createdAt ? { createdAt } : {}) };
+      break;
+    }
+    case "handoff_result": {
+      // Revision 37, for every device: Done or Skip on a hand-off card reads
+      // as the person's message ("You did this: …"), with their note under it.
+      const createdAt = isoOf(entry.at);
+      const note = entry.note?.trim();
+      wire = {
+        type: "message",
+        id: handoffResultEntryId(entry.id),
+        role: "user",
+        text: bounded(note ? `${botHandoffResultLine(entry)}\n\n${note}` : botHandoffResultLine(entry)),
+        ...(createdAt ? { createdAt } : {}),
+      };
+      break;
+    }
+    case "memory_update": {
+      const createdAt = isoOf(entry.at);
+      wire = { type: "memory_update", id, ...(createdAt ? { createdAt } : {}) };
+      break;
+    }
+    case "routine_proposal": {
+      // A card the Bot revised is replaced by the next one; phones show only that.
+      if (entry.supersededBy !== undefined) break;
+      const createdAt = isoOf(entry.at);
+      const { proposal } = entry;
+      wire = {
+        type: "routine_proposal",
+        id,
+        proposalId: proposal.proposalId,
+        name: wireText(proposal.name, 120).trim() || "Routine",
+        prompt: bounded(proposal.prompt).trim() || proposal.name,
+        // The card's own "when": a schedule with its timezone, or what starts it.
+        label:
+          wireText(botRoutineProposalWhen(proposal), 120).trim() ||
+          (proposal.trigger ? "When something happens" : "On a schedule"),
+        status: entry.status,
+        ...(entry.status === "accepted" && entry.routineId ? { routineId: wireText(entry.routineId, 160) } : {}),
+        ...(createdAt ? { createdAt } : {}),
+      };
+      break;
+    }
+    // Revision 61: settings changes (`bot:settings-changes`), suggestions and
+    // learning receipts (`bot:suggestions`); `entriesFor` drops them for other devices.
+    case "settings_change":
+    case "skill_proposal":
+    case "lesson_proposal":
+    case "lesson_learned":
+    case "memory_tidy": {
+      wire = projectBotUxEntry(entry, id, isoOf(entry.at)) ?? null;
+      break;
+    }
+    case "shared_image": {
+      // Revision 45: name, type and size only; the bytes have their own route.
+      const image = sharedImageWireOf(entry);
+      if (image) wire = { type: "shared_image", id, ...image };
+      break;
+    }
+    default:
+      break;
+  }
+  cache?.set(entry, { submissionId, wire });
+  return wire;
+}
+
+function projectBotSessionEntriesDetailed(
+  entries: readonly EntryRecord[],
+  submissions: ReadonlyMap<string, string>,
+  checkpoint?: BotTranscriptCheckpoint,
+  cache?: WeakMap<BotTranscriptEntry, CachedWireEntry>,
+): { entries: AidenRemoteBotSessionEntry[]; sharedImages: Map<string, SharedImageTranscriptEntry> } {
+  const output: AidenRemoteBotSessionEntry[] = [];
+  const cards = new Map<string, number>();
+  const sharedImages = new Map<string, SharedImageTranscriptEntry>();
+  for (const entry of projectBotTranscript(entries, checkpoint)) {
+    const id = wireEntryId(entry.id);
+    if (entry.type === "shared_image") {
+      sharedImages.set(id, entry);
+    }
+    if (entry.type === "notice") {
+      if (entry.notice === "session_reset") {
+        output.push({ type: "notice", id, notice: "session_reset" });
+      } else {
+        for (let index = output.length - 1; index >= 0; index -= 1) {
+          const item = output[index]!;
+          if (item.type === "message") {
+            if (item.role === "assistant" && !item.interrupted) {
+              output[index] = { ...item, interrupted: true };
+            }
+            break;
+          }
+        }
+      }
+      continue;
+    }
+    if (entry.type === "connect_card") {
+      const suggestion = connectionSuggestionFor(entry.card.pluginId);
+      if (!suggestion) continue;
+      const projected: AidenRemoteBotSessionEntry = {
+        type: "connect_card",
+        id,
+        pluginId: suggestion.pluginId,
+        name: suggestion.name,
+        iconId: suggestion.iconId,
+        reason: wireText(entry.card.reason.trim(), 280) || `Connect ${suggestion.name}.`,
+        // `needs_access` is desktop-only; phones keep offering "Finish on your Mac".
+        status: entry.card.status === "needs_access" ? "pending" : entry.card.status,
+      };
+      const index = cards.get(suggestion.pluginId);
+      if (index === undefined) {
+        cards.set(suggestion.pluginId, output.length);
+        output.push(projected);
+      } else {
+        output[index] = { ...projected, id: output[index]!.id };
+      }
+      continue;
+    }
+    const projected = projectSingleSessionEntry(entry, submissions, cache);
+    if (projected) output.push(projected);
+  }
+  return { entries: output, sharedImages };
+}
+
 export function projectBotSessionEntries(
   entries: readonly EntryRecord[],
   submissions: ReadonlyMap<string, string> = new Map(),
 ): AidenRemoteBotSessionEntry[] {
-  const output: AidenRemoteBotSessionEntry[] = [];
-  const cards = new Map<string, number>();
-  for (const entry of projectBotTranscript(entries)) {
-    const id = wireEntryId(entry.id);
-    switch (entry.type) {
-      case "peer": {
-        const createdAt = isoOf(entry.at);
-        output.push({ type: "peer", id, exchangeId: entry.exchangeId, direction: entry.direction, peerBotId: entry.peerBotId, peerName: wireText(entry.peerName, 160), messageKind: entry.messageKind, ...(createdAt ? { createdAt } : {}), ...(entry.final === true ? { final: true as const } : {}) });
-        break;
-      }
-      case "bot_message":
-      case "bot_message_status": {
-        const createdAt = isoOf(entry.at);
-        const label = entry.type === "bot_message" ? botMessageRowLabel(entry.kind, entry.botName) : entry.data.botName;
-        const text = entry.type === "bot_message" ? entry.text : [botMessageStatusLine(entry.data), ...(entry.data.outcome === "replied_while_paused" && entry.data.text ? [entry.data.text] : [])].join("\n\n");
-        output.push({type: "message", id, role: "user", label: wireText(label, 120), text: bounded(text), ...(createdAt ? {createdAt} : {})});
-        break;
-      }
-      case "user":
-      case "routine": {
-        const createdAt = isoOf(entry.at);
-        const label = entry.type === "routine" ? wireText(entry.label, 120).trim() : "";
-        const submissionId = entry.type === "user" ? submissions.get(entry.id) : undefined;
-        output.push({
-          type: "message",
-          id,
-          role: "user",
-          // A routine shows the person's prompt, not its notes block or the silence rule.
-          // Photos sent without words read as a caption: phones show no image there.
-          text: bounded(entry.type === "routine" ? botRoutinePromptOf(entry.text) : entry.text.trim() ? entry.text : photoCaption(entry.imageCount)),
-          ...(createdAt ? { createdAt } : {}),
-          ...(label ? { label } : {}),
-          ...(submissionId !== undefined && WIRE_SUBMISSION_ID.test(submissionId) ? { submissionId } : {}),
-        });
-        break;
-      }
-      case "assistant": {
-        const text = entry.text.trim() ? entry.text : "";
-        // A tool-only step has no text to show; its activity stays on the Mac.
-        if (!text) break;
-        const createdAt = isoOf(entry.at);
-        output.push({
-          type: "message",
-          id,
-          role: "assistant",
-          text: bounded(text),
-          ...(createdAt ? { createdAt } : {}),
-          ...(entry.stopReason === "aborted" ? { interrupted: true as const } : {}),
-        });
-        break;
-      }
-      case "failed_turn": {
-        // The phone shows "I couldn't finish that reply." with Retry; the error stays on the Mac.
-        const createdAt = isoOf(entry.at);
-        const retryText = entry.retryText === null ? "" : bounded(entry.retryText);
-        output.push({
-          type: "failed_turn",
-          id,
-          ...(createdAt ? { createdAt } : {}),
-          ...(retryText.trim() ? { retryText } : {}),
-        });
-        break;
-      }
-      case "question_answer": {
-        // The person's choice on a quick-reply card reads as their message.
-        const createdAt = isoOf(entry.at);
-        output.push({ type: "message", id, role: "user", text: bounded(entry.text), ...(createdAt ? { createdAt } : {}) });
-        break;
-      }
-      case "handoff_result": {
-        // Revision 37, for every device: Done or Skip on a hand-off card reads
-        // as the person's message ("You did this: …"), with their note under it.
-        const createdAt = isoOf(entry.at);
-        const note = entry.note?.trim();
-        output.push({
-          type: "message",
-          id: handoffResultEntryId(entry.id),
-          role: "user",
-          text: bounded(note ? `${botHandoffResultLine(entry)}\n\n${note}` : botHandoffResultLine(entry)),
-          ...(createdAt ? { createdAt } : {}),
-        });
-        break;
-      }
-      case "notice":
-        if (entry.notice === "session_reset") {
-          output.push({ type: "notice", id, notice: "session_reset" });
-        } else {
-          const last = [...output].reverse().find((item) => item.type === "message");
-          if (last?.type === "message" && last.role === "assistant") last.interrupted = true;
-        }
-        break;
-      case "connect_card": {
-        const suggestion = connectionSuggestionFor(entry.card.pluginId);
-        if (!suggestion) break;
-        const projected: AidenRemoteBotSessionEntry = {
-          type: "connect_card",
-          id,
-          pluginId: suggestion.pluginId,
-          name: suggestion.name,
-          iconId: suggestion.iconId,
-          reason: wireText(entry.card.reason.trim(), 280) || `Connect ${suggestion.name}.`,
-          // `needs_access` is desktop-only; phones keep offering "Finish on your Mac".
-          status: entry.card.status === "needs_access" ? "pending" : entry.card.status,
-        };
-        const index = cards.get(suggestion.pluginId);
-        if (index === undefined) {
-          cards.set(suggestion.pluginId, output.length);
-          output.push(projected);
-        } else {
-          output[index] = { ...projected, id: output[index]!.id };
-        }
-        break;
-      }
-      // Revision 27 cards; `withoutBotCards` removes them for devices without `bot:cards`.
-      case "memory_update": {
-        const createdAt = isoOf(entry.at);
-        output.push({ type: "memory_update", id, ...(createdAt ? { createdAt } : {}) });
-        break;
-      }
-      case "routine_proposal": {
-        // A card the Bot revised is replaced by the next one; phones show only that.
-        if (entry.supersededBy !== undefined) break;
-        const createdAt = isoOf(entry.at);
-        const { proposal } = entry;
-        output.push({
-          type: "routine_proposal",
-          id,
-          proposalId: proposal.proposalId,
-          name: wireText(proposal.name, 120).trim() || "Routine",
-          prompt: bounded(proposal.prompt).trim() || proposal.name,
-          // The card's own "when": a schedule with its timezone, or what starts it.
-          label: wireText(botRoutineProposalWhen(proposal), 120).trim() || (proposal.trigger ? "When something happens" : "On a schedule"),
-          status: entry.status,
-          ...(entry.status === "accepted" && entry.routineId ? { routineId: wireText(entry.routineId, 160) } : {}),
-          ...(createdAt ? { createdAt } : {}),
-        });
-        break;
-      }
-      // Revision 61: settings changes (`bot:settings-changes`), suggestions and
-      // learning receipts (`bot:suggestions`); `entriesFor` drops them for other devices.
-      case "settings_change":
-      case "skill_proposal":
-      case "lesson_proposal":
-      case "lesson_learned":
-      case "memory_tidy": {
-        const projected = projectBotUxEntry(entry, id, isoOf(entry.at));
-        if (projected) output.push(projected);
-        break;
-      }
-      case "shared_image": {
-        // Revision 45: name, type and size only; the bytes have their own route.
-        const image = sharedImageWireOf(entry);
-        if (image) output.push({ type: "shared_image", id, ...image });
-        break;
-      }
-      default:
-        break;
-    }
-  }
-  return output;
+  return projectBotSessionEntriesDetailed(entries, submissions).entries;
 }
 
 /** The wire view of a shared image, or null when a phone could not show it (a type or size outside the contract). */
@@ -1024,6 +1094,26 @@ class BotLiveProjector {
   private placedThrough = -1;
   /** The last placement lookup failed: a failing streak is reported once. */
   private placedFailing = false;
+  /** Active-turn checkpoint so step commits project only the active turn tail. */
+  private readonly transcriptCheckpoint = createBotTranscriptCheckpoint();
+  /** Per-entry wire projection cache keyed by `BotTranscriptEntry` identity. */
+  private readonly wireEntryCache = new WeakMap<BotTranscriptEntry, CachedWireEntry>();
+  /** Wire digest (`JSON.stringify(withoutSubmissionId(entry))`) cached per entry object. */
+  private readonly wireDigests = new WeakMap<AidenRemoteBotSessionEntry, string>();
+  /** `view.entries` reference that `cachedBaseEntries` was projected from. */
+  private cachedEntriesRef: readonly EntryRecord[] | undefined;
+  private cachedSubmissionsVersion = -1;
+  private submissionsVersion = 0;
+  private cachedBaseEntries: AidenRemoteBotSessionEntry[] = [];
+  private previousDigests = new Map<string, string>();
+  private hasPendingConnectCard = false;
+  /** `view.entries` reference that `sharedImagesByWireId` was indexed from. */
+  private sharedImagesEntriesRef: readonly EntryRecord[] | undefined;
+  private sharedImagesByWireId = new Map<string, SharedImageTranscriptEntry>();
+  private sharedImageBytesCache = new Map<
+    string,
+    { bytes: Buffer; mimeType: AidenRemoteBotSharedImageMimeType } | null
+  >();
   closed = false;
 
   constructor(
@@ -1063,10 +1153,10 @@ class BotLiveProjector {
     const watch = await watchActiveConversation(conversation, ctx);
     this.stopWatch = () => watch.stop();
     this.view = watch.value;
-    this.entries = await this.resolveEntries(
-      projectBotSessionEntries(watch.value.entries, await this.submissionsFor(watch.value.entries)),
-    );
+    const initialEntries = await this.projectEntriesForView(watch.value.entries);
+    this.entries = initialEntries.entries;
     this.pruneSubmissions(this.entries);
+    this.previousDigests = new Map(this.entries.map((entry) => [entry.id, this.digestOf(entry)]));
     this.partial = projectBotSessionPartial(watch.value);
     this.state = await this.readState();
     this.question = this.readQuestion();
@@ -1415,8 +1505,18 @@ class BotLiveProjector {
    * turn already ended. An id that can't be found is left out; phones then
    * match the bubble by its text.
    */
+  private digestOf(entry: AidenRemoteBotSessionEntry): string {
+    let digest = this.wireDigests.get(entry);
+    if (digest === undefined) {
+      digest = JSON.stringify(withoutSubmissionId(entry));
+      this.wireDigests.set(entry, digest);
+    }
+    return digest;
+  }
+
   private async submissionsFor(entries: readonly EntryRecord[]): Promise<ReadonlyMap<string, string>> {
     if (!this.activityDeps) return this.submissionOf;
+    if (entries === this.cachedEntriesRef && !this.placedFailing) return this.submissionOf;
     let newest = this.placedThrough;
     for (const record of entries) {
       if (isBotInputEntryKind(record.kind) && Number(record.id) > newest) newest = Number(record.id);
@@ -1434,9 +1534,46 @@ class BotLiveProjector {
       return this.submissionOf;
     }
     for (const [entryId, submissionId] of placed) {
-      if (WIRE_SUBMISSION_ID.test(submissionId)) this.submissionOf.set(entryId, submissionId);
+      if (WIRE_SUBMISSION_ID.test(submissionId) && this.submissionOf.get(entryId) !== submissionId) {
+        this.submissionOf.set(entryId, submissionId);
+        this.submissionsVersion += 1;
+      }
     }
     return this.submissionOf;
+  }
+
+  private async projectEntriesForView(
+    entries: readonly EntryRecord[],
+  ): Promise<{ entries: AidenRemoteBotSessionEntry[]; unchanged: boolean }> {
+    const submissions = await this.submissionsFor(entries);
+    if (entries === this.cachedEntriesRef && this.cachedSubmissionsVersion === this.submissionsVersion) {
+      if (!this.hasPendingConnectCard) {
+        return { entries: this.entries, unchanged: true };
+      }
+      const resolved = await this.resolveEntries(this.cachedBaseEntries);
+      const unchanged =
+        resolved.length === this.entries.length &&
+        resolved.every((entry, index) => {
+          const prev = this.entries[index]!;
+          return entry === prev || (entry.id === prev.id && this.digestOf(entry) === this.digestOf(prev));
+        });
+      return unchanged ? { entries: this.entries, unchanged: true } : { entries: resolved, unchanged: false };
+    }
+    const projected = projectBotSessionEntriesDetailed(
+      entries,
+      submissions,
+      this.transcriptCheckpoint,
+      this.wireEntryCache,
+    );
+    this.cachedEntriesRef = entries;
+    this.cachedSubmissionsVersion = this.submissionsVersion;
+    this.cachedBaseEntries = projected.entries;
+    this.hasPendingConnectCard = projected.entries.some((entry) => entry.type === "connect_card" && entry.status === "pending");
+    this.sharedImagesEntriesRef = entries;
+    this.sharedImagesByWireId = projected.sharedImages;
+    this.sharedImageBytesCache.clear();
+    const resolved = await this.resolveEntries(projected.entries);
+    return { entries: resolved, unchanged: false };
   }
 
   /**
@@ -1446,16 +1583,40 @@ class BotLiveProjector {
    */
   sharedImage(entryId: string): { bytes: Buffer; mimeType: AidenRemoteBotSharedImageMimeType } | null {
     if (!this.view) return null;
-    for (const entry of projectBotTranscript(this.view.entries)) {
-      if (entry.type !== "shared_image" || wireEntryId(entry.id) !== entryId) continue;
-      const wire = sharedImageWireOf(entry);
-      if (!wire) return null;
-      const bytes = Buffer.from(entry.data, "base64");
-      if (bytes.length !== entry.size || bytes.length > AIDEN_REMOTE_BOT_SHARED_IMAGE_MAX_BYTES) return null;
-      if (!imageBytesMatchMime(bytes, wire.mimeType)) return null;
-      return { bytes, mimeType: wire.mimeType };
+    if (this.sharedImagesEntriesRef !== this.view.entries) {
+      const nextImages = new Map<string, SharedImageTranscriptEntry>();
+      for (const entry of projectBotTranscript(this.view.entries, this.transcriptCheckpoint)) {
+        if (entry.type === "shared_image") nextImages.set(wireEntryId(entry.id), entry);
+      }
+      this.sharedImagesEntriesRef = this.view.entries;
+      this.sharedImagesByWireId = nextImages;
+      this.sharedImageBytesCache.clear();
     }
-    return null;
+    if (this.sharedImageBytesCache.has(entryId)) {
+      return this.sharedImageBytesCache.get(entryId) ?? null;
+    }
+    const entry = this.sharedImagesByWireId.get(entryId);
+    if (!entry) {
+      this.sharedImageBytesCache.set(entryId, null);
+      return null;
+    }
+    const wire = sharedImageWireOf(entry);
+    if (!wire) {
+      this.sharedImageBytesCache.set(entryId, null);
+      return null;
+    }
+    const bytes = Buffer.from(entry.data, "base64");
+    if (bytes.length !== entry.size || bytes.length > AIDEN_REMOTE_BOT_SHARED_IMAGE_MAX_BYTES) {
+      this.sharedImageBytesCache.set(entryId, null);
+      return null;
+    }
+    if (!imageBytesMatchMime(bytes, wire.mimeType)) {
+      this.sharedImageBytesCache.set(entryId, null);
+      return null;
+    }
+    const result = { bytes, mimeType: wire.mimeType };
+    this.sharedImageBytesCache.set(entryId, result);
+    return result;
   }
 
   /** How many bubble tags this projector holds (the memo's size, for tests of its bound). */
@@ -1483,7 +1644,7 @@ class BotLiveProjector {
    */
   private async publish(view: ActiveConversationView, { snapshotChanges = false } = {}): Promise<void> {
     if (this.closed) return;
-    const next = await this.resolveEntries(projectBotSessionEntries(view.entries, await this.submissionsFor(view.entries)));
+    const projectedEntries = await this.projectEntriesForView(view.entries);
     const partial = projectBotSessionPartial(view);
     const state = await this.readState().catch(() => this.state);
     const question = this.readQuestion();
@@ -1502,42 +1663,47 @@ class BotLiveProjector {
       activity = this.deriveActivity(view, state, question !== null || approval !== null || handoff !== null || accessRequest !== null || planPending);
     }
 
-    const previous = this.entries;
-    this.pruneSubmissions(next);
-    // A bubble's tag is set when it first shows and only dropped once it leaves
-    // the window, so a tag change alone is never news: re-sending an old bubble
-    // would make phones that no longer hold it append it at the bottom.
-    const previousById = new Map(previous.map((entry) => [entry.id, JSON.stringify(withoutSubmissionId(entry))]));
-    const nextIds = new Set(next.map((entry) => entry.id));
-    // Appends and in-place updates are entry events; anything that removes or
-    // reorders shown history (a `[SILENT]` routine turn hiding its input) is a snapshot.
-    const kept = previous.filter((entry) => nextIds.has(entry.id)).map((entry) => entry.id);
-    const order = next.filter((entry) => previousById.has(entry.id)).map((entry) => entry.id);
-    const rewritten =
-      kept.length !== previous.length ||
-      kept.some((id, index) => order[index] !== id) ||
-      (snapshotChanges && next.some((entry) => previousById.get(entry.id) !== JSON.stringify(withoutSubmissionId(entry))));
+    if (!projectedEntries.unchanged) {
+      const next = projectedEntries.entries;
+      const previous = this.entries;
+      this.pruneSubmissions(next);
+      // A bubble's tag is set when it first shows and only dropped once it leaves
+      // the window, so a tag change alone is never news: re-sending an old bubble
+      // would make phones that no longer hold it append it at the bottom.
+      const previousById = this.previousDigests;
+      const nextDigests = new Map<string, string>();
+      for (const entry of next) nextDigests.set(entry.id, this.digestOf(entry));
+      // Appends and in-place updates are entry events; anything that removes or
+      // reorders shown history (a `[SILENT]` routine turn hiding its input) is a snapshot.
+      const kept = previous.filter((entry) => nextDigests.has(entry.id)).map((entry) => entry.id);
+      const order = next.filter((entry) => previousById.has(entry.id)).map((entry) => entry.id);
+      const rewritten =
+        kept.length !== previous.length ||
+        kept.some((id, index) => order[index] !== id) ||
+        (snapshotChanges && next.some((entry) => previousById.get(entry.id) !== nextDigests.get(entry.id)));
 
-    this.entries = next;
-    if (rewritten) {
-      this.partial = partial;
-      this.state = state;
-      this.question = question;
-      this.approval = approval;
-      this.handoff = handoff;
-      this.accessRequest = accessRequest;
-      this.plan = plan;
-      this.activity = activity;
-      this.queued = queued;
-      this.issues = issues;
-      this.legacyIssues = legacyIssues;
-      this.seq += 1;
-      this.broadcast((audience) => this.snapshotFrame(audience));
-      return;
-    }
-    for (const entry of next) {
-      if (previousById.get(entry.id) === JSON.stringify(withoutSubmissionId(entry))) continue;
-      this.frame({ type: "entry", payload: { entry } });
+      this.entries = next;
+      this.previousDigests = nextDigests;
+      if (rewritten) {
+        this.partial = partial;
+        this.state = state;
+        this.question = question;
+        this.approval = approval;
+        this.handoff = handoff;
+        this.accessRequest = accessRequest;
+        this.plan = plan;
+        this.activity = activity;
+        this.queued = queued;
+        this.issues = issues;
+        this.legacyIssues = legacyIssues;
+        this.seq += 1;
+        this.broadcast((audience) => this.snapshotFrame(audience));
+        return;
+      }
+      for (const entry of next) {
+        if (previousById.get(entry.id) === nextDigests.get(entry.id)) continue;
+        this.frame({ type: "entry", payload: { entry } });
+      }
     }
     if (partial !== this.partial) {
       this.partial = partial;
@@ -1600,7 +1766,10 @@ class BotLiveProjector {
   /** Re-reads the transcript's connect cards, so one finished on the Mac shows Connected. */
   refreshCards(): Promise<void> {
     return this.serial(async () => {
-      if (!this.closed && this.view) await this.publish(this.view, { snapshotChanges: true });
+      if (!this.closed && this.view) {
+        this.cachedEntriesRef = undefined;
+        await this.publish(this.view, { snapshotChanges: true });
+      }
     });
   }
 

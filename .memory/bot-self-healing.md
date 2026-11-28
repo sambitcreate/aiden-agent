@@ -22,10 +22,10 @@ Spec: `docs/superpowers/specs/2026-10-27-bot-autonomy-design.md` §4–§5. Plan
   - Connections are checked for Custom grants only, through `botCapabilityCatalog.reconcile`. The computer check is a store read only.
   - Pre-fire timers rearm every 5 minutes from `schedules.json` and on power resume. Issue keys are `preflight:<checkId>`.
   - IPC `bots:health:report` / `bots:health:check`. The desktop section is `renderer/main/bots/bot-health-section.tsx`.
-- **Watchdog:** `main/services/bot-runtime/bot-run-watchdog.ts`, wired in bot-session-main (`watchRun` subscribes to the live projection; any event counts as progress).
+- **Watchdog:** `main/services/bot-runtime/bot-run-watchdog.ts`, wired in bot-session-main (`watchRun` attaches `botLiveProjection.observeRun`, tracking `pi.live` frames, entry appends, and `pi.inbox` queue count without projecting transcript entries).
   - Routine runs: stopped, and recorded `stalled` through the `botRunStalls` mark and `consumeStall`.
   - Attended runs: a `run_stalled` issue with Stop and Keep waiting (`snoozeBotRunWatchdog`).
-- **Claim check:** `main/services/bot-runtime/bot-claim-check.ts`, which reuses the chat detector over the newest turn's projected tool results. `botTurnClaims(botId)` uses the Bot's MCP tool names (`toolSources.mcpToolNames`).
+- **Claim check:** `main/services/bot-runtime/bot-claim-check.ts` (pure detector over a turn's projected tool results, safe for isolated schedule bundles) paired with `projectNewestBotTurnEntries` in `main/services/bot-runtime/live-projection.ts` (scans conversation entries in descending order across `pi.user`, `aiden.person-input`, and `aiden.routine-input` openings to slice only the newest turn). `botTurnClaims(botId)` uses the Bot's MCP tool names (`toolSources.mcpToolNames`).
 
 ## Known limits
 - No claim chip on attended desktop Bot replies yet (routine results only).
