@@ -10,9 +10,11 @@ import {
   adaptOAuthProvider,
   authorizeMcp,
   McpOAuthAuthorizationRequiredError,
+  OAuthInsecureEndpointError,
   parseWwwAuthenticate,
   type OAuthClientProvider,
 } from "@earendil-works/pi-mcp/oauth";
+import { parseMcpOAuthEndpointUrl } from "../../renderer/shared/mcp-oauth-config.js";
 import { createMcpFetchPolicy, MAX_MCP_RESPONSE_BYTES, type McpFetchPolicyOptions } from "./mcp-fetch-policy.js";
 
 /**
@@ -44,7 +46,51 @@ function needsSignIn(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "mcp-oauth-sign-in-required";
 }
 
+function isFatalOAuthEndpointError(error: unknown): boolean {
+  return error instanceof OAuthInsecureEndpointError ||
+    (error instanceof Error && /^OAuth (?:endpoint|metadata) URL /u.test(error.message));
+}
+
+function sanitizedEndpointText(raw: string): string {
+  try {
+    const parsed = new URL(raw);
+    parsed.username = "";
+    parsed.password = "";
+    parsed.hash = "";
+    return parsed.href;
+  } catch {
+    return "[invalid resource_metadata URL]";
+  }
+}
+
 type RefreshOptions = Partial<Pick<Parameters<typeof authorizeMcp>[1], "serverUrl" | "fetch" | "resourceMetadataUrl" | "scope">>;
+
+function challengeField(header: string | null, name: string): string | undefined {
+  if (!header) return undefined;
+  const scheme = header.trimStart().split(/\s+/u, 1)[0]?.toLowerCase();
+  if (scheme !== "bearer" && scheme !== "dpop") return undefined;
+  const match = new RegExp(`(?:^|[\\s,])${name}=(?:"([^"]*)"|([^\\s,]+))`, "iu").exec(header);
+  return match?.[1] || match?.[2] || undefined;
+}
+
+function validateChallengeResourceMetadata(header: string | null, serverUrl: string | URL): URL | undefined {
+  const challenge = parseWwwAuthenticate(header);
+  const rawResourceMetadata = challengeField(header, "resource_metadata");
+  try {
+    if (rawResourceMetadata !== undefined) {
+      parseMcpOAuthEndpointUrl(rawResourceMetadata, serverUrl);
+    }
+    if (challenge.resourceMetadataUrl !== undefined) {
+      parseMcpOAuthEndpointUrl(challenge.resourceMetadataUrl.href, serverUrl);
+    }
+  } catch (cause) {
+    const target = challenge.resourceMetadataUrl?.href ?? rawResourceMetadata ?? "";
+    const error = new OAuthInsecureEndpointError(sanitizedEndpointText(target));
+    Object.defineProperty(error, "cause", { value: cause, configurable: true, writable: true });
+    throw error;
+  }
+  return challenge.resourceMetadataUrl;
+}
 
 function adaptRemoteOAuthProvider(
   provider: McpRemoteOAuthProvider,
@@ -53,12 +99,13 @@ function adaptRemoteOAuthProvider(
   const adapted = adaptOAuthProvider(provider);
   const mapError = (error: unknown) => provider.mapAuthorizationError ? provider.mapAuthorizationError(error) : error;
   if (!provider.withRefreshLock) {
-    if (!provider.mapAuthorizationError || !adapted.onUnauthorized) return adapted;
+    if (!adapted.onUnauthorized) return adapted;
     const onUnauthorized = adapted.onUnauthorized.bind(adapted);
     return {
       token: () => adapted.token(),
       onUnauthorized: async (context) => {
         try {
+          validateChallengeResourceMetadata(context.response.headers.get("www-authenticate"), context.serverUrl ?? service.serverUrl);
           await onUnauthorized(context);
         } catch (error) {
           throw mapError(error);
@@ -98,9 +145,8 @@ function adaptRemoteOAuthProvider(
       try {
         await refresh(current);
       } catch (error) {
-        // The grant is gone (invalid_grant, a dead client): fail rather than
-        // send a token the stored session no longer holds.
-        if (needsSignIn(error)) throw error;
+        // The grant is gone (invalid_grant, a dead client) or the endpoint is unsafe: fail closed.
+        if (needsSignIn(error) || isFatalOAuthEndpointError(error)) throw error;
         // A transient failure: the token is still valid for a moment, so send
         // it and let a 401 decide what happens next, without retrying the
         // refresh on every request meanwhile.
@@ -110,13 +156,15 @@ function adaptRemoteOAuthProvider(
       return (await provider.tokens())?.access_token;
     },
     onUnauthorized: async (context) => {
-      const challenge = parseWwwAuthenticate(context.response.headers.get("www-authenticate"));
+      const header = context.response.headers.get("www-authenticate");
+      const challenge = parseWwwAuthenticate(header);
       try {
+        const resourceMetadataUrl = validateChallengeResourceMetadata(header, context.serverUrl ?? service.serverUrl);
         // A step-up for more scope keeps the tokens; Pi's recovery handles it.
         if (challenge.error === "insufficient_scope") return await adapted.onUnauthorized!(context);
         await refresh(context.token, {
           serverUrl: context.serverUrl,
-          resourceMetadataUrl: challenge.resourceMetadataUrl,
+          resourceMetadataUrl,
           scope: challenge.scope,
           fetch: context.fetch,
         });
@@ -160,7 +208,9 @@ export function createMcpRemoteFetch(options: McpRemoteFetchOptions): typeof glo
       if (transientStatus(response.status)) provider.observeRefreshFailure?.(new Error(`the token endpoint answered HTTP ${response.status}`));
       return response;
     } catch (error) {
-      provider.observeRefreshFailure?.(error instanceof Error ? error : new Error(String(error)));
+      if (!(error instanceof OAuthInsecureEndpointError)) {
+        provider.observeRefreshFailure?.(error instanceof Error ? error : new Error(String(error)));
+      }
       throw error;
     }
   };
@@ -235,25 +285,26 @@ class AidenStreamableHttpTransport extends StreamableHttpTransport {
  * lock uses the tokens the holder saved instead of refreshing again.
  */
 export function createMcpRemoteTransport(
-  options: McpRemoteFetchOptions & { onTerminalFailure?: () => void; wrapFetch?: (send: typeof globalThis.fetch) => typeof globalThis.fetch },
+  options: McpRemoteFetchOptions & { onTerminalFailure?: () => void },
 ): StreamableHttpTransport {
   const lifetime = new AbortController();
   const toolSends = new Map<string | number, () => void>();
-  const fetchImpl = options.fetch ?? globalThis.fetch;
   const serviceUrl = new URL(options.serviceUrl).href;
-  const send: typeof globalThis.fetch = (input, init) => {
-    // Only the matching service RPC carries tool authority. The same client
-    // can concurrently send OAuth, SSE, cancellation and other tool requests.
-    if (toolSends.size && init?.method === "POST" && typeof init.body === "string" &&
-        String(input) === serviceUrl && new Headers(init.headers).get("content-type") === "application/json") {
-      const rpc = JSON.parse(init.body);
-      if (rpc?.method === "tools/call") toolSends.get(rpc.id)?.();
-    }
-    return fetchImpl(input, init);
-  };
   const fetch = createMcpRemoteFetch({
     ...options,
-    fetch: options.wrapFetch ? options.wrapFetch(send) : send,
+    wrapFetch: (base) => {
+      const send: typeof globalThis.fetch = (input, init) => {
+        // Only the matching service RPC carries tool authority. The same client
+        // can concurrently send OAuth, SSE, cancellation and other tool requests.
+        if (toolSends.size && init?.method === "POST" && typeof init.body === "string" &&
+            String(input) === serviceUrl && new Headers(init.headers).get("content-type") === "application/json") {
+          const rpc = JSON.parse(init.body);
+          if (rpc?.method === "tools/call") toolSends.get(rpc.id)?.();
+        }
+        return base(input, init);
+      };
+      return options.wrapFetch ? options.wrapFetch(send) : send;
+    },
     signal: options.signal ? AbortSignal.any([lifetime.signal, options.signal]) : lifetime.signal,
   });
   return new AidenStreamableHttpTransport({

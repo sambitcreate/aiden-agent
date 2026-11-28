@@ -5,25 +5,96 @@ export const MCP_OAUTH_LOOPBACK_PORT = 41390;
 /** The redirect URI Aiden registers, and the one to register for a pre-registered client. */
 export const MCP_OAUTH_REDIRECT_URI = `http://127.0.0.1:${MCP_OAUTH_LOOPBACK_PORT}/callback`;
 
-/** Explicit OAuth authority override; ordinary discovery remains the default. */
-export function parseMcpOAuthMetadataUrl(value: unknown): string {
+const LOOPBACK_SERVICE_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+export function isMcpLoopbackHost(hostname: string): boolean {
+  return LOOPBACK_SERVICE_HOSTS.has(hostname);
+}
+
+export function isMcpLoopbackServiceUrl(serviceUrl: string | URL | undefined): boolean {
+  if (!serviceUrl) return false;
+  let url: URL;
+  try { url = serviceUrl instanceof URL ? new URL(serviceUrl.href) : new URL(serviceUrl); } catch { return false; }
+  return (url.protocol === "http:" || url.protocol === "https:") && !url.username && !url.password && isMcpLoopbackHost(url.hostname);
+}
+
+function ipv4Octets(host: string): [number, number, number, number] | undefined {
+  const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u.exec(host);
+  if (!match) return undefined;
+  const octets = match.slice(1).map(Number) as [number, number, number, number];
+  return octets.every((part) => part >= 0 && part <= 255) ? octets : undefined;
+}
+
+function isDisallowedRemoteIpv4([a, b]: [number, number, number, number]): boolean {
+  return a === 127 || a === 0 || (a === 169 && b === 254) || a >= 224;
+}
+
+function isDisallowedRemoteOAuthHost(hostname: string): boolean {
+  if (hostname.startsWith("[") && hostname.endsWith("]")) {
+    const bare = hostname.slice(1, -1).toLowerCase();
+    if (bare.includes("%")) return true;
+    const embeddedHex = /^(?:::ffff:|::|64:ff9b::|64:ff9b:1:(?:[0-9a-f]{1,4}:){0,2}:?)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/u.exec(bare);
+    if (embeddedHex) {
+      const high = Number.parseInt(embeddedHex[1]!, 16);
+      const low = Number.parseInt(embeddedHex[2]!, 16);
+      return isDisallowedRemoteIpv4([high >> 8, high & 255, low >> 8, low & 255]);
+    }
+    const embeddedDotted = /^(?:::ffff:|::|64:ff9b::)(\d{1,3}(?:\.\d{1,3}){3})$/u.exec(bare);
+    if (embeddedDotted) {
+      const octets = ipv4Octets(embeddedDotted[1]!);
+      if (octets) return isDisallowedRemoteIpv4(octets);
+    }
+    return bare === "::" || bare === "::1" || /^fe[89ab][0-9a-f]?:/u.test(bare) || bare.startsWith("ff");
+  }
+  const normalized = hostname.replace(/\.+$/u, "").toLowerCase();
+  if (!normalized || normalized === "localhost" || normalized.endsWith(".localhost")) return true;
+  const octets = ipv4Octets(normalized);
+  return octets ? isDisallowedRemoteIpv4(octets) : false;
+}
+
+function parseCheckedOAuthUrl(value: unknown, options: { allowLoopback: boolean; label: string }): string {
   if (typeof value !== "string" || !value || value.length > 2048 || value.trim() !== value || [...value].some((char) => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127)) {
-    throw new Error("OAuth metadata URL must be a URL of at most 2,048 characters.");
+    throw new Error(`${options.label} must be a URL of at most 2,048 characters.`);
   }
   let url: URL;
-  try { url = new URL(value); } catch { throw new Error("OAuth metadata URL is invalid."); }
-  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
-  if ((url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) || url.username || url.password || url.hash) {
-    throw new Error("OAuth metadata URL requires HTTPS (or HTTP on loopback), without credentials or a fragment.");
+  try { url = new URL(value); } catch { throw new Error(`${options.label} is invalid.`); }
+  if (url.username || url.password || url.hash) {
+    throw new Error(`${options.label} requires HTTPS${options.allowLoopback ? " (or HTTP on loopback)" : ""}, without credentials or a fragment.`);
+  }
+  if (options.allowLoopback) {
+    if (url.protocol !== "https:" && !(url.protocol === "http:" && isMcpLoopbackHost(url.hostname))) {
+      throw new Error(`${options.label} requires HTTPS (or HTTP on loopback), without credentials or a fragment.`);
+    }
+    return url.href;
+  }
+  if (url.protocol !== "https:" || isDisallowedRemoteOAuthHost(url.hostname)) {
+    throw new Error(`${options.label} requires a non-loopback HTTPS URL without credentials or a fragment.`);
   }
   return url.href;
 }
 
-export function mcpOAuthMetadataUrlForServer(server: { transport?: unknown; oauth?: unknown; authServerMetadataUrl?: unknown; presetId?: unknown }): string | undefined {
+/** Validate an OAuth discovery, authorization, registration, or token URL for `serviceUrl`. */
+export function parseMcpOAuthEndpointUrl(value: unknown, serviceUrl?: string | URL): string {
+  return parseCheckedOAuthUrl(value, {
+    allowLoopback: isMcpLoopbackServiceUrl(serviceUrl),
+    label: "OAuth endpoint URL",
+  });
+}
+
+/** Explicit OAuth authority override; ordinary discovery remains the default. */
+export function parseMcpOAuthMetadataUrl(value: unknown, serviceUrl?: string | URL): string {
+  const hasServiceUrl = serviceUrl !== undefined && (serviceUrl instanceof URL || serviceUrl.trim() !== "");
+  return parseCheckedOAuthUrl(value, {
+    allowLoopback: hasServiceUrl ? isMcpLoopbackServiceUrl(serviceUrl) : true,
+    label: "OAuth metadata URL",
+  });
+}
+
+export function mcpOAuthMetadataUrlForServer(server: { transport?: unknown; oauth?: unknown; authServerMetadataUrl?: unknown; presetId?: unknown; url?: unknown }): string | undefined {
   if (server.authServerMetadataUrl === undefined) return undefined;
   if (server.transport === "stdio" || server.oauth !== true) throw new Error("OAuth metadata overrides require a remote server with OAuth sign-in enabled.");
   if (server.presetId) throw new Error("OAuth metadata overrides require a custom MCP server.");
-  return parseMcpOAuthMetadataUrl(server.authServerMetadataUrl);
+  return parseMcpOAuthMetadataUrl(server.authServerMetadataUrl, typeof server.url === "string" ? server.url : undefined);
 }
 
 

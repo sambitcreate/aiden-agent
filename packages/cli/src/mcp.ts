@@ -1,4 +1,4 @@
-import { validateMcpServerMetadata } from "../../../renderer/shared/mcp-oauth-config.js";
+import { parseMcpOAuthEndpointUrl, validateMcpServerMetadata } from "../../../renderer/shared/mcp-oauth-config.js";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { isMcpFieldSecretMarker, MCP_FIELD_SECRET_PREFIX } from "../../../renderer/shared/mcp-field-secrets.js";
 import { mcpServerOffersTools, mcpToolsOfferedToModel } from "../../../renderer/shared/mcp-exposure.js";
@@ -263,7 +263,10 @@ function cliOAuthRuntime(agentDir: string, server: McpServer, options: { openBro
     store,
     gate: oauthOperations,
     status: noLiveStatus,
-    openBrowser: async (url) => { await (options.openBrowser ?? printSignInUrl)(url); },
+    openBrowser: async (url) => {
+      const checked = parseMcpOAuthEndpointUrl(url, server.url);
+      await (options.openBrowser ?? printSignInUrl)(checked);
+    },
     // Info and warnings repeat what the caller already returns or throws; errors
     // (a sign-in that could not be rolled back) have no other channel.
     log: { info() {}, warn() {}, error: (message, error) => { process.stderr.write(`aiden: MCP sign-in: ${message}${error ? ` (${errorText(error)})` : ""}\n`); } },
@@ -477,7 +480,7 @@ export function createCliMcpPool(agentDir: string, options: { child?: boolean } 
           ? createMcpStdioTransport({ command: server.command!, args: server.args ?? [], env: server.env ?? {}, stderr: "pipe" })
           : createMcpRemoteTransport({
             serviceUrl: server.url!, serviceHeaders: server.headers,
-            ...(options.child ? { fetch: createBoundedSubagentMcpFetch(), maximumBytes: MAX_SUBAGENT_MCP_RAW_RESPONSE_BYTES } : {}),
+            ...(options.child ? { wrapFetch: (send) => createBoundedSubagentMcpFetch(send), maximumBytes: MAX_SUBAGENT_MCP_RAW_RESPONSE_BYTES } : {}),
             // Stored tokens only: refreshes them, never registers or opens a browser.
             authProvider: server.oauth ? createBackgroundMcpOAuthProvider(cliOAuthRuntime(agentDir, server), resolved) : undefined,
             // A server that proved the session gone retires this connection; the next call reconnects.

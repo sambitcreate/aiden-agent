@@ -1,4 +1,4 @@
-import { parseMcpOAuthMetadataUrl } from "../../renderer/shared/mcp-oauth-config.js";
+import { parseMcpOAuthEndpointUrl, parseMcpOAuthMetadataUrl } from "../../renderer/shared/mcp-oauth-config.js";
 import {
   type OAuthClientInformationMixed,
   type OAuthDiscoveryState,
@@ -151,7 +151,7 @@ export function mcpAuthorizationBinding(url: string, authServerMetadataUrl?: str
   parsed.hash = "";
   parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
   const resource = parsed.toString();
-  return authServerMetadataUrl === undefined && clientIdentity === undefined ? resource : JSON.stringify([resource, authServerMetadataUrl === undefined ? null : parseMcpOAuthMetadataUrl(authServerMetadataUrl), clientIdentity ?? null]);
+  return authServerMetadataUrl === undefined && clientIdentity === undefined ? resource : JSON.stringify([resource, authServerMetadataUrl === undefined ? null : parseMcpOAuthMetadataUrl(authServerMetadataUrl, resource), clientIdentity ?? null]);
 }
 
 export function sessionMatchesMcpBinding(session: McpOAuthSession, binding: string): boolean {
@@ -463,9 +463,25 @@ export class McpOAuthAuthorizationFlow {
    */
   responseIssuer?: string;
 
+  constructor(private readonly serviceUrl?: string) {}
+
   saveDiscovery(state: OAuthDiscoveryState): void {
+    parseMcpOAuthEndpointUrl(state.authorizationServerUrl, this.serviceUrl);
+    if (state.resourceMetadataUrl !== undefined) {
+      parseMcpOAuthEndpointUrl(state.resourceMetadataUrl, this.serviceUrl);
+    }
+    for (const server of state.resourceMetadata?.authorization_servers ?? []) {
+      parseMcpOAuthEndpointUrl(server, this.serviceUrl);
+    }
     const metadata = state.authorizationServerMetadata;
-    if (metadata && !sameMcpOAuthIssuer(metadata.issuer, state.authorizationServerUrl)) throw new Error("OAuth metadata issuer does not match the selected authorization server.");
+    if (metadata) {
+      for (const endpoint of [metadata.issuer, metadata.authorization_endpoint, metadata.token_endpoint, metadata.registration_endpoint]) {
+        if (endpoint !== undefined) parseMcpOAuthEndpointUrl(endpoint, this.serviceUrl);
+      }
+      if (!sameMcpOAuthIssuer(metadata.issuer, state.authorizationServerUrl)) {
+        throw new Error("OAuth metadata issuer does not match the selected authorization server.");
+      }
+    }
     this.discovery = structuredClone(state);
   }
 
@@ -479,6 +495,7 @@ export class McpOAuthAuthorizationFlow {
 
   authorizationUrl(url: URL, grantedScope?: string): URL {
     if (url.searchParams.get("state") !== this.state) throw new Error("MCP OAuth state was not bound to this sign-in.");
+    parseMcpOAuthEndpointUrl(url.href, this.serviceUrl);
     const result = new URL(url);
     const scopes = mcpScopeTokens(grantedScope, result.searchParams.get("scope"));
     this.requestedScope = scopes.join(" ") || undefined;
@@ -487,6 +504,7 @@ export class McpOAuthAuthorizationFlow {
     // Pi asks for consent when its own scope includes offline_access; a
     // granted scope merged in here can add it, so apply the same rule.
     if (scopes.includes("offline_access") && !result.searchParams.has("prompt")) result.searchParams.set("prompt", "consent");
+    parseMcpOAuthEndpointUrl(result.href, this.serviceUrl);
     const metadata = this.discovery?.authorizationServerMetadata;
     this.expectedIssuer = metadata?.issuer ?? this.discovery?.authorizationServerUrl;
     this.issuerRequired = metadata !== undefined && "authorization_response_iss_parameter_supported" in metadata &&

@@ -219,7 +219,7 @@ export class AidenMcpOAuthProvider implements McpRemoteOAuthProvider {
     this.requestIsCurrent = options.isCurrent ?? (() => true);
     this.transaction = options.transaction;
     this.observeTokens = options.observeTokens;
-    this.authorization = options.authorization ?? new McpOAuthAuthorizationFlow();
+    this.authorization = options.authorization ?? new McpOAuthAuthorizationFlow(options.server?.url);
     this.server = options.server;
     this.metadataSignal = options.metadataSignal;
     this.redirectUri = options.redirectUri ?? options.runtime.loopback.redirectUri;
@@ -744,7 +744,7 @@ export async function authorizeMcpServerWithRuntime(
     // the flow fills a private replacement. A renderer reload, a failed
     // provider or a crash before the commit cannot erase working credentials.
     const transaction = new McpOAuthSessionTransaction(sessionForMcpAuthorizationAttempt(previousSession, binding));
-    const authorization = new McpOAuthAuthorizationFlow();
+    const authorization = new McpOAuthAuthorizationFlow(serviceUrl);
     loopback = await startMcpOAuthLoopback({
       port: runtime.loopback.port,
       redirectUri: runtime.loopback.redirectUri,
