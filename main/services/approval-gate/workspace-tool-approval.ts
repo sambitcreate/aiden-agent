@@ -133,7 +133,8 @@ const HOOK_VERDICTS = { block: "deny", ask: "ask", allow: "allow" } as const;
 /**
  * The part of the person's Mac a workspace tool call reaches, if any. Anything
  * that starts a process is shell; anything that writes into the folder is
- * files. These ask on first use in every mode and are never judged.
+ * files. These ask on first use unless the workspace's mode covers the
+ * built-in file tools, and are never judged.
  */
 export function workspaceMacClass(toolName: string, args: unknown): MacGrantClass | undefined {
   if (APPROVAL_TOOL_NAMES.has(toolName)) return MAC_TOOL_CLASSES.get(toolName);
@@ -151,9 +152,14 @@ export function workspaceGateAction(input: WorkspaceToolApprovalInput): GateActi
     // Reached only once the chat's Computer Use access was granted.
     return { toolName, mac: true, macClass: "computer-use", consequential: true, granted: true };
   }
-  const macClass = workspaceMacClass(toolName, args);
-  // The legacy Full access already allowed shell and files; a chosen mode
-  // allows them only once "Allowed in this workspace".
+  // In Never ask, the built-in file tools follow the mode. They still check
+  // the workspace boundary and protected paths when they resolve each file.
+  const fileChangeFollowsMode = input.approval?.mode === "never" &&
+    (input.permission === "ask" || input.permission === "full") &&
+    !input.botBound && !input.connector &&
+    (toolName === WRITE_FILE_TOOL || toolName === "edit_file");
+  const macClass = fileChangeFollowsMode ? undefined : workspaceMacClass(toolName, args);
+  // Legacy Full access already allowed shell and files.
   const macGranted = macClass !== undefined &&
     (input.approval ? input.approval.macGrants.has(macClass) : input.permission !== "ask");
   const consequential =

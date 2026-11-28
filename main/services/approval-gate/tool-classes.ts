@@ -2,7 +2,7 @@
 // sets in code, never settings.
 //
 //   Exempt         a Bot's own things: never asks
-//   Mac            shell, file changes, Computer Use: first use asks in every mode
+//   Mac            shell, file changes, Computer Use: first use needs a grant
 //   Consequential  changes or sends something: judged in Auto, asked in Ask
 //   Explicit-only  asks once in every mode, never judged, never remembered
 //   Held           never applied by the agent (hook proposals, access or rule

@@ -19,10 +19,7 @@ export const APPROVAL_MODE_LABELS: Readonly<Record<ApprovalMode, string>> = {
   never: "Never ask",
 };
 
-/**
- * One line on what a mode does. Never ask still asks before the first command, file change or Computer Use, and
- * the first two exist on Linux too, so the computer is named by `localComputerNoun`.
- */
+/** What a mode does, including which actions still need approval in Never ask. */
 export function approvalModeHelp(mode: ApprovalMode, computer: LocalComputerNoun): string {
   switch (mode) {
     case "auto":
@@ -30,11 +27,11 @@ export function approvalModeHelp(mode: ApprovalMode, computer: LocalComputerNoun
     case "ask":
       return "Asks before sending, spending or changing anything.";
     case "never":
-      return `Asks only before purchases, sharing your data and the first use of your ${computer}. Only Block rules apply.`;
+      return `Writes and edits workspace files without asking. First commands on your ${computer}, Computer Use and actions such as purchases can still ask. Block rules and approval hooks apply.`;
   }
 }
 
-/** The parts of the person's Mac whose first use asks in every mode (§3.3). */
+/** The parts of the person's Mac for which a workspace can save a first-use grant. */
 export const MAC_GRANT_CLASSES = ["shell", "files", "computer-use"] as const;
 export type MacGrantClass = (typeof MAC_GRANT_CLASSES)[number];
 

@@ -622,6 +622,9 @@ test.describe("with a workspace", () => {
     const useSettings = options.getByRole("radio", { name: /^Approvals: Use Settings \(/u });
     const ask = options.getByRole("radio", { name: "Approvals: Ask", exact: true });
     const neverAsk = options.getByRole("radio", { name: "Approvals: Never ask", exact: true });
+    const neverAskHelp = "Writes and edits workspace files without asking. First commands still need permission.";
+    await expect(neverAsk.getByText(neverAskHelp)).toBeVisible();
+    await expect(neverAsk).toHaveAccessibleDescription(neverAskHelp);
     await expect(permission).toHaveAttribute("aria-expanded", "true");
     await expect(permission).not.toHaveAttribute("aria-haspopup");
     await expect(options).toHaveAttribute("id", await permission.getAttribute("aria-controls") as string);

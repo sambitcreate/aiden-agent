@@ -77,7 +77,7 @@ Settings → **Approvals**, one control:
 | --- | --- |
 | **Auto** (default when a usable model exists) | "A model approves routine actions and asks you about the rest." |
 | **Ask** | "Asks before sending, spending or changing anything." |
-| **Never ask** | "Asks only before purchases, sharing your data and the first use of your Mac. Only Block rules apply." ("computer" on Linux and on phones) |
+| **Never ask** | Writes and edits workspace files without asking. First commands, Computer Use and actions such as purchases can still ask. Block rules and approval hooks apply. |
 
 - With no usable model, Auto is hidden and the mode is Ask.
 - There is no per-Bot mode. Every Bot follows the global mode.
@@ -103,7 +103,7 @@ Tool classes (fixed sets in code, not settings):
 | Class | Members | Behaviour |
 | --- | --- | --- |
 | **Exempt** | A Bot's own memory, its home folder, its schedules and wake-ups (subject to deviation b), its subagents, its Bot computer (Lume VM), its browser profile reads | Never asks |
-| **Mac** | Shell, files outside a Bot's home or inside a workspace, Computer Use (one grant for all apps, deviation f), ACP harness execute and edit | First use asks in every mode (§3.3) |
+| **Mac** | Shell, files outside a Bot's home or inside a workspace, Computer Use (one grant for all apps, deviation f), ACP harness execute and edit | First use asks (§3.3). As of 2026-11-28, the built-in workspace write and edit tools follow Never ask without a first-use grant. |
 | **Consequential** | Today's built-in rule classes (communicate, delete, publish, install), mutating connection tools, browser click and type that submit, forget memory, background jobs, device actions, app-control changes | Step 8 |
 | **Explicit-only** | Schedule mutations, MCP server connect, pairing-adjacent actions, whole-Mac folder access, disclosure tools (deviation e) | Step 3 |
 | **Held changes** | Hook proposals, access or rule changes | Never applied by the agent. Always a person's Apply / Dismiss. |

@@ -39,6 +39,7 @@ test("a command approval asks whether to run it on the Mac and shows the exact c
   });
 
   assert.equal(screen.getByRole("region", { name: "Run on your Mac?" }), card);
+  assert.equal(within(card).queryByText(/needs workspace permission/u), null, "older exact-command scopes are separate");
   assert.match(card.querySelector("#approval-summary-approval-1")?.textContent ?? "", /rm -rf dist && npm ci$/u);
   assert.deepEqual(
     within(card).getAllByRole("button").map((button) => button.getAttribute("aria-label") ?? button.textContent),
@@ -129,7 +130,7 @@ test("the Allow menu offers the remembered scopes and sends the one picked", asy
   assert.deepEqual(decisions, [["allow", { scope: "always" }]]);
 });
 
-test("under an approval mode a Mac card keeps Allow once and offers the shell for this whole workspace", async () => {
+test("a first-use command card explains the workspace permission and offers it alongside Allow once", async () => {
   const { card, decisions } = mount({
     toolName: "run_command",
     summary: "Run command: npm test",
@@ -137,6 +138,7 @@ test("under an approval mode a Mac card keeps Allow once and offers the shell fo
     scopes: ["once", "workspace"],
   });
   assert.equal(screen.getByRole("region", { name: "Run on your Mac?" }), card);
+  assert.ok(within(card).getByText(/needs workspace permission/u));
   assert.ok(within(card).getByRole("button", { name: "Allow once" }));
   fireEvent.pointerDown(within(card).getByRole("button", { name: "More ways to allow" }), { button: 0, pointerType: "mouse" });
   const items = await screen.findAllByRole("menuitem");
@@ -149,6 +151,33 @@ test("under an approval mode a Mac card keeps Allow once and offers the shell fo
   cleanup();
   render(<ApprovalStatusLine status={{ decision: "allow", scope: "workspace" }} />);
   assert.ok(screen.getByText("Allowed in this workspace"));
+});
+
+test("a first-use file card explains why it asks and offers future file changes for the workspace", async () => {
+  const { card, decisions } = mount({
+    toolName: "write_file",
+    summary: "Create or replace file: still-now.html",
+    preview: toolApprovalPreview("write_file", { path: "still-now.html", content: "<p>Still</p>" }),
+    scopes: ["once", "workspace"],
+  });
+  assert.ok(screen.getByRole("region", {
+    name: "Change files on your Mac?",
+    description: /needs workspace permission/u,
+  }));
+  fireEvent.pointerDown(within(card).getByRole("button", { name: "More ways to allow" }), { button: 0, pointerType: "mouse" });
+  const option = await screen.findByRole("menuitem", { name: /Allow in this workspace.*changing files in this workspace/u });
+  fireEvent.click(option);
+  assert.deepEqual(decisions, [["allow", { scope: "workspace" }]]);
+});
+
+test("a background command's workspace grant describes command permission", async () => {
+  const { card } = mount({
+    toolName: "background_job",
+    summary: "Start background job: npm run dev",
+    scopes: ["once", "workspace"],
+  });
+  fireEvent.pointerDown(within(card).getByRole("button", { name: "More ways to allow" }), { button: 0, pointerType: "mouse" });
+  assert.ok(await screen.findByRole("menuitem", { name: /Allow in this workspace.*running commands in this workspace/u }));
 });
 
 test("a remembered file approval says it covers any later change to that file", async () => {

@@ -131,6 +131,64 @@ test("a file the Files panel couldn't open opens once the agent writes it", asyn
   await expect(panel.getByRole("textbox", { name: "Edit notes.md" })).toHaveValue("rewritten\n");
 });
 
+test("Never ask writes and edits files on first use without saving a grant", async ({ aiden }) => {
+  const { page, lmStudio, workspaceDir } = aiden;
+  await finishLmStudioOnboarding(page);
+  await page.evaluate(async (workspaceId) => {
+    const { ipc } = (window as unknown as {
+      aidenAPI: { ipc: { invoke(channel: string, ...args: unknown[]): Promise<unknown> } };
+    }).aidenAPI;
+    await ipc.invoke("workspaces:update", workspaceId, { approvalMode: "never", clearMacGrants: true });
+    await ipc.invoke("chat:approvalRules:add", {
+      target: { kind: "tool", tool: "write_file" },
+      decision: "ask",
+    });
+  }, E2E_WORKSPACE_ID);
+  const mode = page.getByRole("button", { name: /^Approvals: Never ask/u });
+  const card = page.getByRole("region", { name: "Change files on your Mac?" });
+  await expect(mode).toBeVisible();
+  const send = async (prompt: string) => {
+    await page.locator("textarea").first().fill(prompt);
+    await page.getByRole("button", { name: "Send message" }).click();
+  };
+  const created = lmStudio.enqueueToolScenario!({
+    prompt: "Create hello.txt with a greeting.",
+    calls: [{ name: "write_file", arguments: { path: "hello.txt", content: "Hello\n" } }],
+    finalText: "The file is ready.",
+  });
+  await send("Create hello.txt with a greeting.");
+  await expect(page.getByText("The file is ready.").first()).toBeVisible();
+  expect(created.error).toBeUndefined();
+  expect(readFileSync(path.join(workspaceDir, "hello.txt"), "utf8")).toBe("Hello\n");
+  await expect(card).toHaveCount(0);
+
+  const edited = lmStudio.enqueueToolScenario!({
+    prompt: "Change the greeting in hello.txt.",
+    calls: [{ name: "edit_file", arguments: { path: "hello.txt", old_string: "Hello", new_string: "Hi" } }],
+    finalText: "The greeting is updated.",
+  });
+  await send("Change the greeting in hello.txt.");
+  await expect(page.getByText("The greeting is updated.").first()).toBeVisible();
+  expect(edited.error).toBeUndefined();
+  expect(readFileSync(path.join(workspaceDir, "hello.txt"), "utf8")).toBe("Hi\n");
+  await expect(card).toHaveCount(0);
+
+  await mode.click();
+  await page.getByRole("radio", { name: "Approvals: Ask", exact: true }).click();
+  await expect(page.getByRole("button", { name: /^Approvals: Ask\./u })).toBeVisible();
+  const declined = lmStudio.enqueueToolScenario!({
+    prompt: "Change the greeting again.",
+    calls: [{ name: "edit_file", arguments: { path: "hello.txt", old_string: "Hi", new_string: "Hello again" } }],
+    finalText: "Handled the decision.",
+  });
+  await send("Change the greeting again.");
+  await expect(card.getByRole("button", { name: /Allow once/u })).toBeVisible();
+  await card.getByRole("button", { name: /Deny/u }).click();
+  await expect.poll(() => declined.completed).toBe(true);
+  expect(declined.error).toBeUndefined();
+  expect(readFileSync(path.join(workspaceDir, "hello.txt"), "utf8")).toBe("Hi\n");
+});
+
 test("Environment keeps its tabs, width and open state across a relaunch and answers its toggle command", async ({
   aiden,
 }) => {

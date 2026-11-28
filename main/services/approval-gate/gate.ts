@@ -284,7 +284,9 @@ function decide(context: GateContext, action: GateAction): GateDecision {
     if (!action.consequential && unwatched) return { outcome: "block", step: "ask-rule", reason: "unattended-rule" };
     return { outcome: "ask", step: "ask-rule", offer: "rule" };
   }
-  if (action.pageRule === "ask") {
+  // In explicit Never ask, a rules-page Ask must not replace a missing Mac
+  // grant's card. That card is how the person can grant access for future calls.
+  if (action.pageRule === "ask" && (mode !== "never" || context.mode === undefined)) {
     // As a Bot's own rule: nobody can answer a card on a call that needed none.
     if (!action.consequential && unwatched) return { outcome: "block", step: "ask-rule", reason: "unattended-rule" };
     return { outcome: "ask", step: "ask-rule", offer: "once" };

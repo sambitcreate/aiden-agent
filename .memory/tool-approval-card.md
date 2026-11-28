@@ -1,5 +1,9 @@
 # Tool approval card redesign — 2026-10-22
 
+2026-11-28 follow-up: The owner asked Never ask to skip the first workspace file prompt. The built-in `write_file` and `edit_file` follow the effective mode without saving a grant. Shell, screenshot saves, explicit reviews, filesystem boundaries, Block rules and hook requirements retain their own checks.
+
+2026-11-28: The Never ask composer option explains first-use command and file permissions. A desktop card with the `workspace` scope explains why it asks and how to allow future actions of that type. An explicit Never ask mode skips a rules-page Always ask match even when the action still needs its first-use permission. Before this change the rule hid the workspace grant and offered only Allow once.
+
 Branch `claude/project-thread-khrad6`. The owner asked for a better-looking Allow/Deny prompt on desktop and iPhone, after a reference screenshot (centered icon tile, title, big code block, centered note, two equal buttons). On desktop the card follows the composer's corner radius, and Allow keeps a dropdown for the remembered scopes.
 
 - **Desktop** (`renderer/components/chat-approval-card.tsx`):

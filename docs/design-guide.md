@@ -72,6 +72,10 @@ Specialized approvals
 (scheduled tasks, subagent grants, form fills, classifiers, hook proposals)
 keep their own review bodies inside the same card.
 
+When a card offers a first-use workspace permission, the line below the
+request explains why it asks and points to **Allow in this workspace** for
+future actions of that type.
+
 Cards show one at a time with "1 of N". Calls waiting in the same run share one
 card that answers all of them only when they are the same call: the same tool
 with the same arguments (and, in the browser, the same tab). Cards whose text
