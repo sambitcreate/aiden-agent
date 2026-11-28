@@ -17,7 +17,34 @@ import { hasMcpAgentToolNameShape } from "../mcp-tool-identity.js";
 import { bringsOutsideContent, FETCH_TOOL_NAMES } from "./tool-classes.js";
 
 const URL_PATTERN = /\bhttps?:\/\/[^\s<>"'`)\]]+/gi;
+const EMAIL_PATTERN = /[a-z0-9.!#$%&'*+=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*/gi;
 const BARE_HOST_PATTERN = /\b((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24})\b/gi;
+
+/**
+ * Common file extensions (including ones that collide with real TLDs such as
+ * `.md`, `.sh`, `.py`, `.rs`, `.pl`, `.zip`, `.mov`, `.so`, `.tf`) that should
+ * not turn bare filenames in a chat message into trusted fetch destinations.
+ * Explicit URLs (e.g. `https://readme.md`) still match `URL_PATTERN`.
+ */
+const FILE_EXTENSION_SUFFIXES: ReadonlySet<string> = new Set([
+  // Collide with real ICANN TLDs
+  "am", "as", "cc", "cr", "es", "gs", "md", "ml", "mov", "ms", "pl", "pm",
+  "ps", "py", "rs", "sh", "so", "st", "tf", "zip",
+  // Common source, config, doc, data, media, archive and binary extensions
+  "astro", "avi", "bak", "bash", "bat", "bib", "bz2", "cer", "cfg", "cjs",
+  "class", "cmake", "cmd", "conf", "cpp", "crt", "cs", "css", "csv", "cts",
+  "cxx", "db", "deb", "diff", "dll", "dmg", "docx", "dylib", "env", "erl",
+  "ex", "exe", "exs", "fish", "gif", "go", "gql", "gradle", "graphql", "gz",
+  "hcl", "hpp", "hs", "htm", "html", "hxx", "ico", "ini", "jar", "java",
+  "jks", "jpeg", "jpg", "js", "json", "jsonl", "jsx", "key", "kt", "kts",
+  "less", "lock", "log", "lua", "map", "mdx", "mjs", "mk", "mkv", "mp3",
+  "mp4", "mts", "nix", "otf", "p12", "patch", "pdf", "pem", "pfx", "php",
+  "pkg", "plist", "png", "pptx", "properties", "proto", "ps1", "rb", "rpm",
+  "rst", "scss", "sql", "sqlite", "svelte", "svg", "swift", "tar", "tex",
+  "tgz", "tmp", "toml", "ts", "tsv", "tsx", "ttf", "txt", "vue", "wasm",
+  "wav", "webp", "woff", "woff2", "xlsx", "xml", "xz", "yaml", "yml", "zig",
+  "zsh",
+]);
 
 function hostOf(value: string): string | undefined {
   try {
@@ -32,12 +59,25 @@ function hostOf(value: string): string | undefined {
 /** The sites a person's text names: full URLs and bare host names. */
 export function namedHosts(text: string): Set<string> {
   const hosts = new Set<string>();
-  for (const match of text.matchAll(URL_PATTERN)) {
-    const host = hostOf(match[0]);
-    if (host) hosts.add(host);
-  }
-  for (const match of text.matchAll(BARE_HOST_PATTERN)) {
-    hosts.add(match[1]!.toLowerCase().replace(/^www\./, ""));
+  const withoutUrlsOrEmails = text
+    .replace(URL_PATTERN, (raw) => {
+      const host = hostOf(raw);
+      if (host) hosts.add(host);
+      return " ".repeat(raw.length);
+    })
+    .replace(EMAIL_PATTERN, (raw) => " ".repeat(raw.length));
+  for (const match of withoutUrlsOrEmails.matchAll(BARE_HOST_PATTERN)) {
+    const raw = match[1]!;
+    const start = match.index ?? 0;
+    const end = start + raw.length;
+    const prev = start > 0 ? withoutUrlsOrEmails[start - 1] : undefined;
+    const next = end < withoutUrlsOrEmails.length ? withoutUrlsOrEmails[end] : undefined;
+    // Skip filesystem paths, dotfiles, stray `@` mentions and method calls.
+    if (prev === "/" || prev === "\\" || prev === "." || prev === "@" || next === "(" || next === "@") continue;
+    const normalized = raw.toLowerCase().replace(/^www\./, "");
+    const suffix = normalized.slice(normalized.lastIndexOf(".") + 1);
+    if (FILE_EXTENSION_SUFFIXES.has(suffix)) continue;
+    hosts.add(normalized);
   }
   return hosts;
 }

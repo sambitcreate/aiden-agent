@@ -139,6 +139,7 @@ test("Connect and Disconnect are the only way to turn the bridge on and off", as
   screen.getByRole("button", { name: "Disconnect" });
   fireEvent.click(screen.getByRole("button", { name: "Advanced Telegram settings" }));
   await screen.findByRole("switch", { name: "Live answer drafts" });
+  screen.getByRole("switch", { name: "Private-chat threads" });
   assert.equal(screen.queryByRole("switch", { name: /enable|telegram/iu }), null);
 });
 

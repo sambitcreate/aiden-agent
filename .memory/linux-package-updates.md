@@ -17,8 +17,10 @@ repository or switching to the AppImage.
 - Review fix (Pullfrog, same day): the first version checked the download as the
   user and then had root install the user-writable file (swap window = local root).
   Now root runs the shipped helper `Helpers/aiden-package-install`
-  (`scripts/aiden-package-install.sh`) via pkexec: copy into root-only /var/tmp
-  folder, sha512sum + dpkg-deb/rpm identity on the copy, install the copy.
+  (`scripts/aiden-package-install.sh`) via pkexec: reject symlinks, special
+  files (FIFOs/devices), empty files and >1 GiB downloads, copy with
+  `dd iflag=nofollow,nonblock,fullblock` into a root-only /var/tmp folder,
+  sha512sum + dpkg-deb/rpm identity on the copy, install the copy.
 - `main/services/app-updater-linux-package.ts`: eligibility (package-type deb/rpm,
   no APPIMAGE, root-owned and not group/world-writable install, dpkg `.list` owns
   the running executable, root-owned helper, fixed tools incl. `/usr/bin/pkexec`

@@ -15,7 +15,8 @@
 # codes come from the package manager.
 set -eu
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
-export PATH
+LC_ALL=C
+export PATH LC_ALL
 umask 077
 
 [ "$#" -eq 4 ] || exit 2
@@ -30,10 +31,24 @@ case "$expected_sha512" in "" | *[!0-9a-f]*) exit 2 ;; esac
 [ "${#expected_sha512}" -eq 128 ] || exit 2
 case "$expected_version" in "" | *[!0-9.]* | .* | *.) exit 2 ;; esac
 
+# Refuse symlinks, special files (FIFOs/devices), empty files and oversized
+# downloads before root copies anything into /var/tmp. If the source changes
+# after the pre-check, `iflag=nofollow,nonblock` still rejects symlinks and
+# avoids blocking on FIFOs, `count=1025` bounds the bytes copied into /var/tmp,
+# and the staged size, SHA-512 and package-identity checks govern the install.
+max_bytes=1073741824
+[ ! -L "$source" ] && [ -f "$source" ] || exit 3
+source_size=$(stat -c %s -- "$source" 2>/dev/null) || exit 3
+case "$source_size" in "" | *[!0-9]*) exit 3 ;; esac
+[ "$source_size" -gt 0 ] && [ "$source_size" -le "$max_bytes" ] || exit 3
+
 work=$(mktemp -d /var/tmp/aiden-update.XXXXXX)
 trap 'rm -rf -- "$work"' EXIT
 staged="$work/aiden-agent.$kind"
-cp -- "$source" "$staged" || exit 3
+dd if="$source" of="$staged" bs=1048576 count=1025 iflag=nofollow,nonblock,fullblock status=none 2>/dev/null || exit 3
+staged_size=$(stat -c %s -- "$staged" 2>/dev/null) || exit 3
+case "$staged_size" in "" | *[!0-9]*) exit 3 ;; esac
+[ "$staged_size" -gt 0 ] && [ "$staged_size" -le "$max_bytes" ] || exit 3
 
 actual_sha512=$(sha512sum -- "$staged" | cut -d ' ' -f 1)
 [ "$actual_sha512" = "$expected_sha512" ] || exit 3

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -239,7 +239,7 @@ printf '%s\\n%s\\n%s\\n' "$3" "$(sha512sum -- "$3" | cut -d ' ' -f 1)" "$(stat -
   const download = path.join(root, "download.deb");
   writeFileSync(download, BYTES);
   const runHelper = (args: string[], env: Record<string, string> = {}) =>
-    spawnSync(helper, args, { encoding: "utf8", env: { ...process.env, FAKE_SOURCE: download, ...env } });
+    spawnSync(helper, args, { encoding: "utf8", timeout: 10_000, env: { ...process.env, FAKE_SOURCE: download, ...env } });
   return { root, log, download, runHelper, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
@@ -277,6 +277,33 @@ test("root's helper refuses changed bytes, another package or version, and malfo
     assert.equal(h.runHelper(["deb", h.download, SHA512, "0.67.0"]).status, 2);
     assert.equal(h.runHelper(["deb", h.download, SHA512_HEX, "0.67.0; rm -rf /"]).status, 2);
     assert.equal(h.runHelper(["deb", h.download, SHA512_HEX]).status, 2);
+    assert.equal(existsSync(h.log), false, "apt-get never ran");
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("root's helper refuses symlinks, FIFOs, empty files and oversized downloads", { skip: process.platform !== "linux" }, () => {
+  const h = helperHarness();
+  try {
+    const link = path.join(h.root, "link.deb");
+    symlinkSync(h.download, link);
+    assert.equal(h.runHelper(["deb", link, SHA512_HEX, "0.67.0"]).status, 3);
+
+    const fifo = path.join(h.root, "pipe.deb");
+    assert.equal(spawnSync("mkfifo", [fifo]).status, 0);
+    assert.equal(h.runHelper(["deb", fifo, SHA512_HEX, "0.67.0"]).status, 3);
+
+    const empty = path.join(h.root, "empty.deb");
+    writeFileSync(empty, "");
+    const emptySha = createHash("sha512").update("").digest("hex");
+    assert.equal(h.runHelper(["deb", empty, emptySha, "0.67.0"]).status, 3);
+
+    const huge = path.join(h.root, "huge.deb");
+    writeFileSync(huge, "");
+    truncateSync(huge, 1024 * 1024 * 1024 + 1);
+    assert.equal(h.runHelper(["deb", huge, SHA512_HEX, "0.67.0"]).status, 3);
+
     assert.equal(existsSync(h.log), false, "apt-get never ran");
   } finally {
     h.cleanup();
