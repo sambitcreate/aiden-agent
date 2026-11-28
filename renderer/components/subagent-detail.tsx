@@ -93,27 +93,25 @@ export interface SubagentDetailProps {
   /** Live context reading; supplied only while the run is active. */
   contextUsage?: SubagentContextUsageV1;
   className?: string;
+  ref?: React.Ref<HTMLHeadingElement>;
 }
 
-export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetailProps>(
-  function SubagentDetail(
-    {
-      run,
-      effectActivity = [],
-      onStop,
-      stopPending = false,
-      stopError = null,
-      presentation,
-      refreshing = false,
-      refreshError = null,
-      refreshErrorKind = "detail",
-      onRetryRefresh,
-      now = Date.now(),
-      contextUsage,
-      className,
-    },
-    headingRef,
-  ) {
+export function SubagentDetail({
+  run,
+  effectActivity = [],
+  onStop,
+  stopPending = false,
+  stopError = null,
+  presentation,
+  refreshing = false,
+  refreshError = null,
+  refreshErrorKind = "detail",
+  onRetryRefresh,
+  now = Date.now(),
+  contextUsage,
+  className,
+  ref: headingRef,
+}: SubagentDetailProps) {
     const scrollRef = React.useRef<HTMLDivElement | null>(null);
     const userNavigatedRef = React.useRef(false);
     const followGrowthRef = React.useRef(false);
@@ -539,5 +537,4 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
         ) : null}
       </article>
     );
-  },
-);
+}

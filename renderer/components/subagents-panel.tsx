@@ -127,15 +127,19 @@ function matchingDetailSnapshot(
   return loaded.revision > live.revision ? loaded : live;
 }
 
-const SubagentDetailPending = React.forwardRef<
-  HTMLHeadingElement,
-  {
-    run: SubagentRunView;
-    loading: boolean;
-    unavailable: boolean;
-    onRetry?: () => void;
-  }
->(function SubagentDetailPending({ run, loading, unavailable, onRetry }, headingRef) {
+function SubagentDetailPending({
+  run,
+  loading,
+  unavailable,
+  onRetry,
+  ref: headingRef,
+}: {
+  run: SubagentRunView;
+  loading: boolean;
+  unavailable: boolean;
+  onRetry?: () => void;
+  ref?: React.Ref<HTMLHeadingElement>;
+}) {
   const state = subagentStateLabel(run.state);
   return (
     <article
@@ -185,7 +189,7 @@ const SubagentDetailPending = React.forwardRef<
       </div>
     </article>
   );
-});
+}
 
 function OwnedSubagentsPanel({
   chatId,

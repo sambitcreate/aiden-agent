@@ -36,10 +36,17 @@ export function useBotCreateDialogs(onOpenChat: (bot: BotDefinition) => void) {
 }
 
 /** The + button and its menu. */
-export const BotCreateMenu = React.forwardRef<
-  HTMLButtonElement,
-  { onNewBot(): void; onTemplates(): void; variant?: "bar" | "toolbar" }
->(function BotCreateMenu({ onNewBot, onTemplates, variant = "bar" }, ref) {
+export function BotCreateMenu({
+  onNewBot,
+  onTemplates,
+  variant = "bar",
+  ref,
+}: {
+  onNewBot(): void;
+  onTemplates(): void;
+  variant?: "bar" | "toolbar";
+  ref?: React.Ref<HTMLButtonElement>;
+}) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -65,4 +72,4 @@ export const BotCreateMenu = React.forwardRef<
       </DropdownMenuContent>
     </DropdownMenu>
   );
-});
+}

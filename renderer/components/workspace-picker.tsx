@@ -496,14 +496,17 @@ type ClonePreviewState =
   | { state: "ready"; url: string; destination: string }
   | { state: "invalid"; url: string; reason: string };
 
-const CloneView = React.forwardRef<
-  CloneViewHandle,
-  {
-    onBack: () => void;
-    onCloningChange: (cloning: boolean) => void;
-    onCloned: (workspace: Workspace) => Promise<void>;
-  }
->(function CloneView({ onBack, onCloningChange, onCloned }, ref) {
+function CloneView({
+  onBack,
+  onCloningChange,
+  onCloned,
+  ref,
+}: {
+  onBack: () => void;
+  onCloningChange: (cloning: boolean) => void;
+  onCloned: (workspace: Workspace) => Promise<void>;
+  ref?: React.Ref<CloneViewHandle>;
+}) {
   const { platform } = useAppCapabilities();
   const queryClient = useQueryClient();
   const urlId = React.useId();
@@ -744,4 +747,4 @@ const CloneView = React.forwardRef<
       </div>
     </div>
   );
-});
+}

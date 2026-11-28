@@ -46,6 +46,29 @@ export default [
     },
   },
   {
+    files: ["renderer/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "MemberExpression[property.name='forwardRef'], CallExpression[callee.name='forwardRef'], ImportDeclaration[source.value='react'] ImportSpecifier[imported.name='forwardRef']",
+          message: "Accept `ref` directly as a prop in React 19 instead of wrapping components in `forwardRef`.",
+        },
+        {
+          selector:
+            "TSTypeReference[typeName.name='ElementRef'], TSQualifiedName[right.name='ElementRef'], ImportDeclaration[source.value='react'] ImportSpecifier[imported.name='ElementRef']",
+          message: "Use `React.ComponentPropsWithRef` or `React.ComponentRef` instead of deprecated `ElementRef`.",
+        },
+        {
+          selector:
+            "TSTypeReference[typeName.name='MutableRefObject'], TSQualifiedName[right.name='MutableRefObject'], ImportDeclaration[source.value='react'] ImportSpecifier[imported.name='MutableRefObject']",
+          message: "Use `React.RefObject` instead of deprecated `MutableRefObject` in React 19.",
+        },
+      ],
+    },
+  },
+  {
     files: ["main/**/*.{ts,tsx}"],
     ignores: ["main/**/*.test.{ts,tsx}", "main/platform.ts"],
     rules: {

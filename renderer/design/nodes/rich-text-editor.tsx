@@ -54,6 +54,7 @@ type Props = {
   onKeyDown?(event: React.KeyboardEvent<HTMLDivElement>): void;
   /** The selection moved or the words changed, so the format bar can show what is on. */
   onSelectionChange?(): void;
+  ref?: React.Ref<RichTextEditorHandle>;
 };
 
 const COMMANDS = {
@@ -66,10 +67,21 @@ const COMMANDS = {
 
 const escapeAttribute = (value: string) => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 
-export const RichTextEditor = React.forwardRef<RichTextEditorHandle, Props>(function RichTextEditor(
-  { value, onChange, label, placeholder, maxLength, className, style, autoFocus, onFocus, onBlur, onKeyDown, onSelectionChange },
+export function RichTextEditor({
+  value,
+  onChange,
+  label,
+  placeholder,
+  maxLength,
+  className,
+  style,
+  autoFocus,
+  onFocus,
+  onBlur,
+  onKeyDown,
+  onSelectionChange,
   ref,
-) {
+}: Props) {
   const box = React.useRef<HTMLDivElement | null>(null);
   // The Markdown the editor last showed or sent, so a change from elsewhere
   // (undo, Aiden) is drawn again and the person's own typing is not.
@@ -248,7 +260,7 @@ export const RichTextEditor = React.forwardRef<RichTextEditorHandle, Props>(func
       />
     </div>
   );
-});
+}
 
 function selectionLink(root: HTMLElement): HTMLAnchorElement | null {
   let node: Node | null = window.getSelection()?.anchorNode ?? null;
