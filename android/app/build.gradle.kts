@@ -93,7 +93,7 @@ dependencies {
   implementation(libs.androidx.compose.material.icons.extended)
 
   // Security & Crypto
-  implementation(libs.androidx.security.crypto)
+  implementation(libs.tink.android)
 
   // Coroutines & Serialization
   implementation(libs.kotlinx.coroutines.core)
