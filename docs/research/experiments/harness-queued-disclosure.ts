@@ -3,7 +3,8 @@
  * Covers pressured tool batches, queued steering, dynamic browser schemas and Stop.
  */
 import assert from "node:assert/strict";
-import { getCurrentTools, Type, createModels } from "@earendil-works/pi-ai";
+import { getCurrentTools, createModels } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { createFauxCore, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import { InMemorySessionRepo } from "../../../main/services/pi-session-repository-port.js";
@@ -29,7 +30,6 @@ async function managedTestHarness(
     initialSystemPrompt?: string;
     initialMessages?: AgentMessage[];
     contextWindow?: number;
-    retryDelayMs?: number;
     consumeHostFailure?: () => "inference" | "policy" | undefined;
     effects?: PiRuntimeSessionBinding["effects"];
     signal?: AbortSignal;
@@ -113,7 +113,6 @@ async function managedTestHarness(
         models: compactionModels,
         model,
         thinkingLevel: "off",
-        retryDelayMs: options.retryDelayMs,
         consumeHostFailure: options.consumeHostFailure,
       },
       ...(options.signal ? { signal: options.signal } : {}),

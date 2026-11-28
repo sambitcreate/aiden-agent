@@ -184,8 +184,8 @@ class CurrentPiSessionPort<Metadata extends PiSessionMetadata>
         model = { provider: entry.message.provider, modelId: entry.message.model };
       }
       if (entry.type !== "custom" || !entry.customType.startsWith("aiden.pi-legacy.")) continue;
-      const data = entry.data;
-      if (!data || typeof data !== "object" || Array.isArray(data)) continue;
+      if (!entry.data || typeof entry.data !== "object" || Array.isArray(entry.data)) continue;
+      const data = entry.data as Record<string, unknown>;
       if (entry.customType === "aiden.pi-legacy.thinking_level_change" && typeof data.thinkingLevel === "string") {
         thinkingLevel = data.thinkingLevel;
       } else if (entry.customType === "aiden.pi-legacy.model_change" && typeof data.provider === "string" && typeof data.modelId === "string") {

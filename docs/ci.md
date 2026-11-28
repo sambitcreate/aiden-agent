@@ -57,7 +57,13 @@ cancelling CI never cancels a release. Runner capacity can still cause queueing.
 
 ## Execution and coverage
 
-- TypeScript (including the e2e project) and lint run on Ubuntu. One macOS
+- TypeScript (`npm run type-check`, which chains the root project and
+  `scripts/tsconfig.json` for `scripts/` and `docs/`; `npm run type-check:e2e`,
+  covering `tests/e2e` and `tests/generative-ui`; and
+  `npm --prefix packages/cli run type-check` after `npm --prefix packages/cli ci`
+  when `cli` is selected) and lint (covering `.ts`, `.tsx`, `.mts`, and `.cts`)
+  run on Ubuntu in `static`. The always-run `policy` job verifies that every
+  git-tracked TypeScript file belongs to a CI-checked `tsconfig.json`. One macOS
   `build` job runs `npm run build` and uploads `build/` as a tarred, one-day
   artifact; the Electron shards and `verify` download it instead of rebuilding.
   Diagnostics and branding remain in `verify`; the model-catalog suite runs in

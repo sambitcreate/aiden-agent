@@ -8,9 +8,10 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { createModels, createInitialSystemMessage, toToolDeclaration, Type, type AssistantMessage } from "@earendil-works/pi-ai";
+import { createModels, createInitialSystemMessage, toToolDeclaration, type AssistantMessage } from "@earendil-works/pi-ai";
 import { createFauxCore, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
+import { Type } from "typebox";
 import { PiAgentRuntimeHarness } from "../../../main/services/pi-agent-runtime-harness.js";
 import { InMemorySessionRepo } from "../../../main/services/pi-session-repository-port.js";
 import { createPiSessionPort } from "../../../main/services/pi-session-port.js";
@@ -86,7 +87,7 @@ const harness = new PiAgentRuntimeHarness({
   onContextProjection: (projection) => projections.push({ tokens: projection.contextTokens, historyMessages: projection.compressibleHistoryMessages, shouldCompact: projection.shouldCompact }),
   streamFn: (requestModel, context, options) => { requestHashes.push(hash(context)); lifecycle.push("foreground-request"); return core.streamSimple(requestModel, context, options); },
   initialState: { systemPrompt, thinkingLevel: "off", tools: [echo], messages: seed, model },
-  durability: { session, initialMessages: seed, appendMessages: appendPiMessages, compaction: { models, model, thinkingLevel: "off", retryDelayMs: 0, ...(input.automaticSummary === false ? { settings: { enabled: false } } : {}) } },
+  durability: { session, initialMessages: seed, appendMessages: appendPiMessages, compaction: { models, model, thinkingLevel: "off", ...(input.automaticSummary === false ? { settings: { enabled: false } } : {}) } },
 });
 const started = performance.now();
 const outcome = await harness.runManaged({ kind: "continue-durable-tail" });

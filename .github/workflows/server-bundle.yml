@@ -39,6 +39,9 @@ jobs:
           npm ci --ignore-scripts
           npm ci --prefix packages/cli
 
+      - name: Verify CLI TypeScript
+        run: npm --prefix packages/cli run type-check
+
       - name: Build the keyed bundle
         env:
           AIDEN_POSTHOG_PROJECT_KEY: ${{ secrets.AIDEN_POSTHOG_PROJECT_KEY }}

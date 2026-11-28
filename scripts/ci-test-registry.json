@@ -1936,7 +1936,7 @@
         "run",
         "test:cli"
       ],
-      "reason": "Install, bundle, and test the standalone packages/cli workspace in one command."
+      "reason": "Install, type-check, bundle, and test the standalone packages/cli workspace in one command."
     }
   ],
   "workflowScripts": [

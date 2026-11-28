@@ -5,7 +5,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { createInitialSystemMessage, getCurrentSystemPrompt, getCurrentTools, normalizeContext, Type, type Api, type Message, type Model, type ProviderStreams, type Tool } from "@earendil-works/pi-ai";
+import { createInitialSystemMessage, getCurrentSystemPrompt, getCurrentTools, normalizeContext, type Api, type Message, type Model, type ProviderStreams, type Tool } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";

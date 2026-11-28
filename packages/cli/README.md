@@ -289,7 +289,7 @@ packages/cli/
   dist/app/             # build output, a self-contained app root (gitignored)
 ```
 
-From this directory, after the root install: `npm install && npm run build`. `npm test` builds nothing; run `npm run build` first, because the tests exercise the built bundle. From the repository root, `npm run test:cli` installs, builds and tests in one step.
+From this directory, after the root install: `npm install && npm run type-check && npm run build`. `npm test` builds nothing; run `npm run build` first, because the tests exercise the built bundle. From the repository root, `npm run test:cli` installs, type-checks, builds and tests in one step.
 
 History: the CLI started as a rebranded Pi terminal app ([`docs/plans/aiden-cli-plan.md`](../../docs/plans/aiden-cli-plan.md), [parity checklist](../../docs/plans/aiden-cli-parity-checklist.md)) and became serve-only on 2026-10-30 ([`docs/plans/completed/aiden-serve-only-cli.md`](../../docs/plans/completed/aiden-serve-only-cli.md)).
 

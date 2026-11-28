@@ -4,5 +4,10 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["../../playwright.config.ts", "./**/*.ts"]
+  "include": [
+    "../../playwright.config.ts",
+    "../../playwright.generative-ui.config.ts",
+    "./**/*.ts",
+    "../generative-ui/**/*.ts"
+  ]
 }

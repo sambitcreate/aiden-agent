@@ -4,12 +4,18 @@
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { createAssistantMessageEventStream, createModels, getCurrentTools, Type, type AssistantMessage } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, createModels, getCurrentTools, type AssistantMessage } from "@earendil-works/pi-ai";
 import { createFauxCore, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
+import { Type } from "typebox";
 import { PiAgentRuntimeHarness } from "../../../main/services/pi-agent-runtime-harness.js";
 import { createGenerationContextTransform, updateGenerationContextOptions } from "../../../main/services/generation-context.js";
-import { recoverAttendedToolErrorContext, advanceAttendedToolErrorState } from "../../../main/services/assistant/tool-loop-guard.js";
+import {
+  ATTENDED_TOOL_FAILURE_RECOVERY_REPLY,
+  recoverAttendedToolErrorContext,
+  advanceAttendedToolErrorState,
+  type AttendedToolErrorState,
+} from "../../../main/services/assistant/tool-loop-guard.js";
 import { createPiSessionPort } from "../../../main/services/pi-session-port.js";
 import { InMemorySessionRepo } from "../../../main/services/pi-session-repository-port.js";
 import { appendPiMessages } from "../../../main/services/pi-compaction-session-store.js";
@@ -31,7 +37,7 @@ for (const refreshAfterRecovery of [false, true]) {
   const generationOptions = { contextWindow: model.contextWindow, systemPrompt: "Policy", tools: [tool], providerId: model.provider, modelId: model.id };
   const reductions: { removedHistory: number; before: number; after: number; kind: string }[] = [];
   const transform = createGenerationContextTransform(generationOptions, (result) => reductions.push({ removedHistory: result.removedHistoryMessages, before: result.estimatedTokensBefore, after: result.estimatedTokensAfter, kind: result.emergencyProjection.kind }));
-  let consecutiveErrors = 0;
+  let errorState: AttendedToolErrorState | undefined;
   let recovered = false;
   const requests: { tools: string[]; hasOriginalIntent: boolean; hasRecoveryInstruction: boolean; messages: number }[] = [];
   const projections: { tokens: number; tools: number; shouldCompact: boolean }[] = [];
@@ -44,13 +50,13 @@ for (const refreshAfterRecovery of [false, true]) {
     convertToLlm, transformContext: transform,
     initialState: { systemPrompt: "Policy", thinkingLevel: "off", tools: [tool], messages: [user], model },
     durability: { session, initialMessages: [user], appendMessages: appendPiMessages,
-      compaction: { models, model, thinkingLevel: "off", settings: { enabled: false }, retryDelayMs: 0 } },
+      compaction: { models, model, thinkingLevel: "off", settings: { enabled: false } } },
     onContextProjection: (projection, options) => projections.push({ tokens: projection.contextTokens, tools: options.tools.length, shouldCompact: projection.shouldCompact }),
     prepareNextTurnWithContext: ({ context, toolResults }) => {
       // Reproduce the caller's existing ordering: no schema/instruction change
       // precedes the attended guard, then recovery removes all executable tools.
-      const next = advanceAttendedToolErrorState(consecutiveErrors, toolResults);
-      consecutiveErrors = next.consecutiveErrorTurns;
+      const next = advanceAttendedToolErrorState(errorState, toolResults);
+      errorState = next;
       if (!next.shouldStop) return undefined;
       const recoveredContext = recoverAttendedToolErrorContext(context, 5);
       recovered = true;
@@ -60,7 +66,7 @@ for (const refreshAfterRecovery of [false, true]) {
     streamFn: (_model, context) => {
       const text = JSON.stringify(context);
       requests.push({ tools: getCurrentTools(context.messages).map((item) => item.name), hasOriginalIntent: text.includes("ORIGINAL_USER_INTENT_47"),
-        hasRecoveryInstruction: text.includes("Two consecutive tool attempts failed"), messages: context.messages.length });
+        hasRecoveryInstruction: text.includes(ATTENDED_TOOL_FAILURE_RECOVERY_REPLY), messages: context.messages.length });
       const next = responses.shift(); assert.ok(next, "unexpected extra foreground request");
       // Deliberately model a provider that does not report token usage, rather
       // than faux's heuristic usage injection, to isolate captured static cost.
